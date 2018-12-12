@@ -47,7 +47,7 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
     #    or 'full' (full diagonal elements).
     partition = getattr(__config__, 'eom_rccsd_EOM_partition', None)
     logger.info(mycc, 'partition = %s', partition)
-    print "Partition value is: ", partition
+    #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
 
     nocc, nvir = t1.shape
@@ -134,91 +134,7 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
 
     return hole_moms
 
-def vector_to_amplitudes_ip(vector, nmo, nocc):
-    nvir = nmo - nocc
-    r1 = vector[:nocc].copy()
-    r2 = vector[nocc:].copy().reshape(nocc,nocc,nvir)
-    return r1, r2
-
-def amplitudes_to_vector_ip(r1, r2):
-    vector = np.hstack((r1, r2.ravel()))
-    return vector
-
-
-def ipccsd_matvec(vector, imds, diag, nocc, nmo, partition):
-    # Ref: Nooijen and Snijders, J. Chem. Phys. 102, 1681 (1995) Eqs.(8)-(9)
-    r1, r2 = vector_to_amplitudes_ip(vector, nmo, nocc)
-
-    # 1h-1h block
-    Hr1 = -np.einsum('ki,k->i', imds.Loo, r1)
-    #1h-2h1p block
-    Hr1 += 2*np.einsum('ld,ild->i', imds.Fov, r2)
-    Hr1 +=  -np.einsum('kd,kid->i', imds.Fov, r2)
-    Hr1 += -2*np.einsum('klid,kld->i', imds.Wooov, r2)
-    Hr1 +=    np.einsum('lkid,kld->i', imds.Wooov, r2)
-
-    # 2h1p-1h block
-    Hr2 = -np.einsum('kbij,k->ijb', imds.Wovoo, r1)
-    # 2h1p-2h1p block
-    if partition == 'mp':
-        fock = imds.eris.fock
-        foo = fock[:nocc,:nocc]
-        fvv = fock[nocc:,nocc:]
-        Hr2 += lib.einsum('bd,ijd->ijb', fvv, r2)
-        Hr2 += -lib.einsum('ki,kjb->ijb', foo, r2)
-        Hr2 += -lib.einsum('lj,ilb->ijb', foo, r2)
-    elif partition == 'full':
-        diag_matrix2 = vector_to_amplitudes_ip(diag, nmo, nocc)[1]
-        Hr2 += diag_matrix2 * r2
-    else:
-        Hr2 += lib.einsum('bd,ijd->ijb', imds.Lvv, r2)
-        Hr2 += -lib.einsum('ki,kjb->ijb', imds.Loo, r2)
-        Hr2 += -lib.einsum('lj,ilb->ijb', imds.Loo, r2)
-        Hr2 +=  lib.einsum('klij,klb->ijb', imds.Woooo, r2)
-        Hr2 += 2*lib.einsum('lbdj,ild->ijb', imds.Wovvo, r2)
-        Hr2 +=  -lib.einsum('kbdj,kid->ijb', imds.Wovvo, r2)
-        Hr2 +=  -lib.einsum('lbjd,ild->ijb', imds.Wovov, r2) #typo in Ref
-        Hr2 +=  -lib.einsum('kbid,kjd->ijb', imds.Wovov, r2)
-        tmp = 2*np.einsum('lkdc,kld->c', imds.Woovv, r2)
-        tmp += -np.einsum('kldc,kld->c', imds.Woovv, r2)
-        Hr2 += -np.einsum('c,ijcb->ijb', tmp, imds.t2)
-
-    vector = amplitudes_to_vector_ip(Hr1, Hr2)
-    return vector
-
-def ipccsd_diag(imds, partition):
-    t1, t2 = imds.t1, imds.t2
-    dtype = np.result_type(t1, t2)
-    nocc, nvir = t1.shape
-    fock = imds.eris.fock
-    foo = fock[:nocc,:nocc]
-    fvv = fock[nocc:,nocc:]
-
-    Hr1 = -np.diag(imds.Loo)
-    Hr2 = np.zeros((nocc,nocc,nvir), dtype)
-    for i in range(nocc):
-        for j in range(nocc):
-            for b in range(nvir):
-                if partition == 'mp':
-                    Hr2[i,j,b] += fvv[b,b]
-                    Hr2[i,j,b] += -foo[i,i]
-                    Hr2[i,j,b] += -foo[j,j]
-                else:
-                    Hr2[i,j,b] += imds.Lvv[b,b]
-                    Hr2[i,j,b] += -imds.Loo[i,i]
-                    Hr2[i,j,b] += -imds.Loo[j,j]
-                    Hr2[i,j,b] +=  imds.Woooo[i,j,i,j]
-                    Hr2[i,j,b] +=2*imds.Wovvo[j,b,b,j]
-                    Hr2[i,j,b] += -imds.Wovvo[i,b,b,i]*(i==j)
-                    Hr2[i,j,b] += -imds.Wovov[j,b,j,b]
-                    Hr2[i,j,b] += -imds.Wovov[i,b,i,b]
-                    Hr2[i,j,b] += -2*np.dot(imds.Woovv[j,i,b,:], t2[i,j,:,b])
-                    Hr2[i,j,b] += np.dot(imds.Woovv[i,j,b,:], t2[i,j,:,b])
-
-    vector = amplitudes_to_vector_ip(Hr1, Hr2)
-    return vector
-
-def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=False):
+def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True):
     '''
     Spin-traced one-particle moment (EA) in MO basis.
 
@@ -234,7 +150,7 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=False
     #    or 'full' (full diagonal elements).
     partition = getattr(__config__, 'eom_rccsd_EOM_partition', None)
     logger.info(mycc, 'partition = %s', partition)
-    print "Partition value is: ", partition
+    #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
 
     nocc, nvir = t1.shape
@@ -320,6 +236,90 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=False
         part_moms = [lib.einsum('pi,ij,qj->pq', mo, mom, mo.conj()) for mom in part_moms]
 
     return part_moms
+
+def vector_to_amplitudes_ip(vector, nmo, nocc):
+    nvir = nmo - nocc
+    r1 = vector[:nocc].copy()
+    r2 = vector[nocc:].copy().reshape(nocc,nocc,nvir)
+    return r1, r2
+
+def amplitudes_to_vector_ip(r1, r2):
+    vector = np.hstack((r1, r2.ravel()))
+    return vector
+
+
+def ipccsd_matvec(vector, imds, diag, nocc, nmo, partition):
+    # Ref: Nooijen and Snijders, J. Chem. Phys. 102, 1681 (1995) Eqs.(8)-(9)
+    r1, r2 = vector_to_amplitudes_ip(vector, nmo, nocc)
+
+    # 1h-1h block
+    Hr1 = -np.einsum('ki,k->i', imds.Loo, r1)
+    #1h-2h1p block
+    Hr1 += 2*np.einsum('ld,ild->i', imds.Fov, r2)
+    Hr1 +=  -np.einsum('kd,kid->i', imds.Fov, r2)
+    Hr1 += -2*np.einsum('klid,kld->i', imds.Wooov, r2)
+    Hr1 +=    np.einsum('lkid,kld->i', imds.Wooov, r2)
+
+    # 2h1p-1h block
+    Hr2 = -np.einsum('kbij,k->ijb', imds.Wovoo, r1)
+    # 2h1p-2h1p block
+    if partition == 'mp':
+        fock = imds.eris.fock
+        foo = fock[:nocc,:nocc]
+        fvv = fock[nocc:,nocc:]
+        Hr2 += lib.einsum('bd,ijd->ijb', fvv, r2)
+        Hr2 += -lib.einsum('ki,kjb->ijb', foo, r2)
+        Hr2 += -lib.einsum('lj,ilb->ijb', foo, r2)
+    elif partition == 'full':
+        diag_matrix2 = vector_to_amplitudes_ip(diag, nmo, nocc)[1]
+        Hr2 += diag_matrix2 * r2
+    else:
+        Hr2 += lib.einsum('bd,ijd->ijb', imds.Lvv, r2)
+        Hr2 += -lib.einsum('ki,kjb->ijb', imds.Loo, r2)
+        Hr2 += -lib.einsum('lj,ilb->ijb', imds.Loo, r2)
+        Hr2 +=  lib.einsum('klij,klb->ijb', imds.Woooo, r2)
+        Hr2 += 2*lib.einsum('lbdj,ild->ijb', imds.Wovvo, r2)
+        Hr2 +=  -lib.einsum('kbdj,kid->ijb', imds.Wovvo, r2)
+        Hr2 +=  -lib.einsum('lbjd,ild->ijb', imds.Wovov, r2) #typo in Ref
+        Hr2 +=  -lib.einsum('kbid,kjd->ijb', imds.Wovov, r2)
+        tmp = 2*np.einsum('lkdc,kld->c', imds.Woovv, r2)
+        tmp += -np.einsum('kldc,kld->c', imds.Woovv, r2)
+        Hr2 += -np.einsum('c,ijcb->ijb', tmp, imds.t2)
+
+    vector = amplitudes_to_vector_ip(Hr1, Hr2)
+    return vector
+
+def ipccsd_diag(imds, partition):
+    t1, t2 = imds.t1, imds.t2
+    dtype = np.result_type(t1, t2)
+    nocc, nvir = t1.shape
+    fock = imds.eris.fock
+    foo = fock[:nocc,:nocc]
+    fvv = fock[nocc:,nocc:]
+
+    Hr1 = -np.diag(imds.Loo)
+    Hr2 = np.zeros((nocc,nocc,nvir), dtype)
+    for i in range(nocc):
+        for j in range(nocc):
+            for b in range(nvir):
+                if partition == 'mp':
+                    Hr2[i,j,b] += fvv[b,b]
+                    Hr2[i,j,b] += -foo[i,i]
+                    Hr2[i,j,b] += -foo[j,j]
+                else:
+                    Hr2[i,j,b] += imds.Lvv[b,b]
+                    Hr2[i,j,b] += -imds.Loo[i,i]
+                    Hr2[i,j,b] += -imds.Loo[j,j]
+                    Hr2[i,j,b] +=  imds.Woooo[i,j,i,j]
+                    Hr2[i,j,b] +=2*imds.Wovvo[j,b,b,j]
+                    Hr2[i,j,b] += -imds.Wovvo[i,b,b,i]*(i==j)
+                    Hr2[i,j,b] += -imds.Wovov[j,b,j,b]
+                    Hr2[i,j,b] += -imds.Wovov[i,b,i,b]
+                    Hr2[i,j,b] += -2*np.dot(imds.Woovv[j,i,b,:], t2[i,j,:,b])
+                    Hr2[i,j,b] += np.dot(imds.Woovv[i,j,b,:], t2[i,j,:,b])
+
+    vector = amplitudes_to_vector_ip(Hr1, Hr2)
+    return vector
 
 def vector_to_amplitudes_ea(vector, nmo, nocc):
     nvir = nmo - nocc
@@ -552,11 +552,6 @@ if __name__ == '__main__':
     mo_ints = ao2mo.kernel(mol,myhf.mo_coeff)
     core_h_mo = reduce(np.dot,(myhf.mo_coeff.T,myhf.get_hcore(),myhf.mo_coeff))
 
-# Test particle
-# Test different partitionings (and make accessible) - make sure same rdm
-# Use np.allclose to check 2e in bigger basis and stretched
-# When same as 
-
     mom_max = 6
     fci_mom_h, fci_mom_p = create_HL_moments(n,nelec,mom_max,vec,core_h_mo,mo_ints,hl_chempot=e-mol.energy_nuc())
     assert(np.allclose(fci_mom_h[0],rdm_fci))
@@ -671,3 +666,10 @@ if __name__ == '__main__':
     #assert(np.allclose(mom_h[0],-dm1_cc))
     #assert(np.allclose(mom_p[0],-CC_part_rdm))
     print('All tests for many-e systems finished')
+
+    # Check sum rule for defaul moments
+    mom_h = mycc.moms_hole(nmom_max_h=0, l1=l1, l2=l2)
+    mom_p = mycc.moms_part(nmom_max_p=0, l1=l1, l2=l2)
+
+    assert(np.allclose(mom_h[0]+mom_p[0],-2.0*np.eye(mom_h[0].shape[0])))
+    print 'Sum rule obeyed for default options.'
