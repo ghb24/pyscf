@@ -630,6 +630,8 @@ if __name__ == '__main__':
 
     dm1_cc = mycc.make_rdm1(l1=l1, l2=l2)
     CC_part_rdm = np.eye(dm1_cc.shape[0])*2.-dm1_cc
+    print 'CCSD RDM trace: ',np.trace(dm1_cc)
+    print 'CCSD part RDM trace: ',np.trace(CC_part_rdm)
 #print 'cc rdm1'
 #print dm1_cc
 
@@ -640,6 +642,8 @@ if __name__ == '__main__':
     print 'Testing many-e with NS definition: ',ns_def
     mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
     mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
+    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
     if not np.allclose(mom_h[0],-dm1_cc):
         print 'ERROR: Hole zeroth moment not the same as CC RDM...'
     else:
@@ -655,6 +659,8 @@ if __name__ == '__main__':
     print 'Testing many-e with NS definition: ',ns_def
     mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
     mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
+    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
     if not np.allclose(mom_h[0],-dm1_cc):
         print 'ERROR: Hole zeroth moment not the same as CC RDM...'
     else:
