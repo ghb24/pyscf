@@ -49,6 +49,8 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
     logger.info(mycc, 'partition = %s', partition)
     #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
+    # ns_def breaks sum rules
+    assert(not ns_def)
 
     nocc, nvir = t1.shape
     nmo = mycc.nmo
@@ -152,6 +154,8 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True)
     logger.info(mycc, 'partition = %s', partition)
     #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
+    # non-ns_def breaks sum rules
+    assert(ns_def)
 
     nocc, nvir = t1.shape
     nmo = mycc.nmo
@@ -574,13 +578,41 @@ if __name__ == '__main__':
 #print 'cc rdm1'
 #print dm1_cc
 
-# BOTH definitions should be exact for two-electron systems for all moments (IP) or the RDM only (EA)
-# False should agree with CC RDMs for systems with > 2 electrons (IP)
-# True should agree with the CC particle RDMs for systems with > 2 electrons (EA)
-    ns_def = True  
-    print 'Testing 2-e with NS definition: ',ns_def
-    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+## BOTH definitions should be exact for two-electron systems for all moments (IP) or the RDM only (EA)
+## False should agree with CC RDMs for systems with > 2 electrons (IP)
+## True should agree with the CC particle RDMs for systems with > 2 electrons (EA)
+#    ns_def = True  
+#    print 'Testing 2-e with NS definition: ',ns_def
+#    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    assert(np.allclose(mom_h[0],-dm1_cc))
+#    assert(np.allclose(mom_p[0],-CC_part_rdm))
+#    for i, hole_mom_cc in enumerate(mom_h):
+#        if i == 0:
+#            hole_mom_cc *= -1. 
+#        assert(np.allclose(hole_mom_cc,fci_mom_h[i]))
+#    assert(np.allclose(mom_p[0],-fci_mom_p[0]))
+## EA-EOM-CCSD not exact for 2-electron systems apart from zeroth moment
+##    for i, part_mom_cc in enumerate(mom_p):
+##        if i==0:
+##            part_mom_cc *= -1. 
+##        assert(np.allclose(part_mom_cc,fci_mom_p[i]))
+#    
+#    ns_def = False 
+#    print 'Testing 2-e with NS definition: ',ns_def
+#    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    assert(np.allclose(mom_h[0],-dm1_cc))
+#    assert(np.allclose(mom_p[0],-CC_part_rdm))
+#    for i, hole_mom_cc in enumerate(mom_h):
+#        if i == 0:
+#            hole_mom_cc *= -1. 
+#        assert(np.allclose(hole_mom_cc,fci_mom_h[i]))
+#    assert(np.allclose(mom_p[0],-fci_mom_p[0]))
+
+    print 'Testing 2-e system... '
+    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2)
+    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2)
     assert(np.allclose(mom_h[0],-dm1_cc))
     assert(np.allclose(mom_p[0],-CC_part_rdm))
     for i, hole_mom_cc in enumerate(mom_h):
@@ -593,18 +625,6 @@ if __name__ == '__main__':
 #        if i==0:
 #            part_mom_cc *= -1. 
 #        assert(np.allclose(part_mom_cc,fci_mom_p[i]))
-    
-    ns_def = False 
-    print 'Testing 2-e with NS definition: ',ns_def
-    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    assert(np.allclose(mom_h[0],-dm1_cc))
-    assert(np.allclose(mom_p[0],-CC_part_rdm))
-    for i, hole_mom_cc in enumerate(mom_h):
-        if i == 0:
-            hole_mom_cc *= -1. 
-        assert(np.allclose(hole_mom_cc,fci_mom_h[i]))
-    assert(np.allclose(mom_p[0],-fci_mom_p[0]))
     print('All tests for 2e systems passed')
     
     print('Testing zeroth moments compared to CC RDMs for many-electron systems...')
@@ -635,47 +655,50 @@ if __name__ == '__main__':
 #print 'cc rdm1'
 #print dm1_cc
 
-# BOTH definitions should be exact for two-electron systems for all moments (IP) or the RDM only (EA)
-# False should agree with CC RDMs for systems with > 2 electrons (IP)
-# True should agree with the CC particle RDMs for systems with > 2 electrons (EA)
-    ns_def = True  
-    print 'Testing many-e with NS definition: ',ns_def
-    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
-    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
-    if not np.allclose(mom_h[0],-dm1_cc):
-        print 'ERROR: Hole zeroth moment not the same as CC RDM...'
-    else:
-        print 'Hole zeroth moment same as CC RDM...'
-    if not np.allclose(mom_p[0],-CC_part_rdm):
-        print 'ERROR: Particle zeroth moment not the same as 2-CC RDM...'
-    else:
-        print 'Particle zeroth moment same as 2-CC RDM...'
-    #assert(np.allclose(mom_h[0],-dm1_cc))
-    #assert(np.allclose(mom_p[0],-CC_part_rdm))
-
-    ns_def = False 
-    print 'Testing many-e with NS definition: ',ns_def
-    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
-    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
-    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
-    if not np.allclose(mom_h[0],-dm1_cc):
-        print 'ERROR: Hole zeroth moment not the same as CC RDM...'
-    else:
-        print 'Hole zeroth moment same as CC RDM...'
-    if not np.allclose(mom_p[0],-CC_part_rdm):
-        print 'ERROR: Particle zeroth moment not the same as 2-CC RDM...'
-    else:
-        print 'Particle zeroth moment same as 2-CC RDM...'
-    #assert(np.allclose(mom_h[0],-dm1_cc))
-    #assert(np.allclose(mom_p[0],-CC_part_rdm))
-    print('All tests for many-e systems finished')
+## BOTH definitions should be exact for two-electron systems for all moments (IP) or the RDM only (EA)
+## False should agree with CC RDMs for systems with > 2 electrons (IP)
+## True should agree with the CC particle RDMs for systems with > 2 electrons (EA)
+#    ns_def = True  
+#    print 'Testing many-e with NS definition: ',ns_def
+#    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
+#    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
+#    if not np.allclose(mom_h[0],-dm1_cc):
+#        print 'ERROR: Hole zeroth moment not the same as CC RDM...'
+#    else:
+#        print 'Hole zeroth moment same as CC RDM...'
+#    if not np.allclose(mom_p[0],-CC_part_rdm):
+#        print 'ERROR: Particle zeroth moment not the same as 2-CC RDM...'
+#    else:
+#        print 'Particle zeroth moment same as 2-CC RDM...'
+#    #assert(np.allclose(mom_h[0],-dm1_cc))
+#    #assert(np.allclose(mom_p[0],-CC_part_rdm))
+#
+#    ns_def = False 
+#    print 'Testing many-e with NS definition: ',ns_def
+#    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2, ns_def=ns_def)
+#    print 'Zeroth moment hole trace: ',np.trace(mom_h[0])
+#    print 'Zeroth moment part trace: ',np.trace(mom_p[0])
+#    if not np.allclose(mom_h[0],-dm1_cc):
+#        print 'ERROR: Hole zeroth moment not the same as CC RDM...'
+#    else:
+#        print 'Hole zeroth moment same as CC RDM...'
+#    if not np.allclose(mom_p[0],-CC_part_rdm):
+#        print 'ERROR: Particle zeroth moment not the same as 2-CC RDM...'
+#    else:
+#        print 'Particle zeroth moment same as 2-CC RDM...'
+#    #assert(np.allclose(mom_h[0],-dm1_cc))
+#    #assert(np.allclose(mom_p[0],-CC_part_rdm))
 
     # Check sum rule for defaul moments
+    print 'Testing many-e systems reproduce density matrix...'
     mom_h = mycc.moms_hole(nmom_max_h=0, l1=l1, l2=l2)
     mom_p = mycc.moms_part(nmom_max_p=0, l1=l1, l2=l2)
+    assert(np.allclose(mom_h[0],-dm1_cc))
+    assert(np.allclose(mom_p[0],-CC_part_rdm))
 
     assert(np.allclose(mom_h[0]+mom_p[0],-2.0*np.eye(mom_h[0].shape[0])))
     print 'Sum rule obeyed for default options.'
+    print('All tests for many-e systems finished')
