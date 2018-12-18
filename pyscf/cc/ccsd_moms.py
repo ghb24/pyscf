@@ -36,8 +36,9 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
     mom_h[p,q] = \sum_{sigma} <q_sigma^\dagger (H-E_0)^n p_sigma>
 
     ns_def defines the terms according to the Nooijen & Snijders definitions given
-    in IJQC 48 15-48 (1993). If this is not used, we get agreement with pyscf RDMs (for >2 electrons)
-    This is because (I believe) pyscf antisymmetrizes the lambda tensor?
+    in IJQC 48 15-48 (1993). If this is not used, we get agreement with pyscf RDMs (for >2 electrons).
+    Is there an error in the paper, or am I missing something in how the tensors are defined?!
+    ns_def should be *false* to get correct behaviour.
         
     '''
         
@@ -144,6 +145,7 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True)
         
     ns_def defines the terms according to the Nooijen & Snijders definitions given
     in IJQC 48 15-48 (1993).
+    ns_def should be *true* to get correct behaviour. This is different to the IP definition.
     '''
         
     #partition : bool or str
