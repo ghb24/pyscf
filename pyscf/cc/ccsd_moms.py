@@ -29,17 +29,16 @@ from pyscf.cc import rintermediates as imd
 from pyscf.cc import eom_rccsd
 from pyscf import __config__
 
-def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False):
+def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=True):
     '''
     Spin-traced one-hole moment in MO basis.
 
     mom_h[p,q] = \sum_{sigma} <q_sigma^\dagger (H-E_0)^n p_sigma>
 
     ns_def defines the terms according to the Nooijen & Snijders definitions given
-    in IJQC 48 15-48 (1993). If this is not used, we get agreement with pyscf RDMs (for >2 electrons).
-    Is there an error in the paper, or am I missing something in how the tensors are defined?!
-    ns_def should be *false* to get correct behaviour.
-        
+    in IJQC 48 15-48 (1993).
+    The alternate definition simply changes the tensor which is antisymmetrized in the spin integration for products of tensors
+    They should be identical.
     '''
         
     #partition : bool or str
@@ -51,7 +50,7 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
     #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
     # ns_def breaks sum rules
-    assert(not ns_def)
+    #assert(not ns_def)
 
     nocc, nvir = t1.shape
     nmo = mycc.nmo
@@ -99,7 +98,7 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
         
         b1 = -t1[:,p]
         if ns_def:
-            b2 = -t2[:,:,:,p]           # This is in Nooijen paper
+            b2 = -t2[:,:,p,:]           # This is in Nooijen paper
         else:
             b2 = -theta[:,:,:,p]
         
@@ -137,15 +136,12 @@ def make_moms_hole(mycc, nmom_max_h, t1, t2, l1, l2, ao_repr=False, ns_def=False
 
     return hole_moms
 
-def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True):
+def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False):
     '''
     Spin-traced one-particle moment (EA) in MO basis.
 
     mom_h[p,q] = \sum_{sigma} <q_sigma (H-E_0)^n p_sigma^\dagger>
         
-    ns_def defines the terms according to the Nooijen & Snijders definitions given
-    in IJQC 48 15-48 (1993).
-    ns_def should be *true* to get correct behaviour. This is different to the IP definition.
     '''
         
     #partition : bool or str
@@ -156,8 +152,6 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True)
     logger.info(mycc, 'partition = %s', partition)
     #print "Partition value is: ", partition
     if partition is not None: assert partition.lower() in ['mp','full']
-    # non-ns_def breaks sum rules
-    assert(ns_def)
 
     nocc, nvir = t1.shape
     nmo = mycc.nmo
@@ -179,16 +173,10 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True)
     for p in range(nocc):
 
         b1 = -t1[p,:].copy()
-        if ns_def:
-            b2 = -t2[p,:,:,:].copy()
-        else:
-            b2 = -theta[p,:,:,:].copy()
+        b2 = -t2[p,:,:,:].copy()
         e1 = l1[p,:].copy()
-        if ns_def:
-            e2 = 2.*l2[p,:,:,:].copy()
-            e2 -= l2[:,p,:,:]
-        else:
-            e2 = l2[:,p,:,:]
+        e2 = 2.*l2[p,:,:,:].copy()
+        e2 -= l2[:,p,:,:]
 
         b_vecs[:,p] = amplitudes_to_vector_ea(b1, b2)
         e_vecs[:,p] = amplitudes_to_vector_ea(e1, e2)
@@ -206,14 +194,10 @@ def make_moms_part(mycc, nmom_max_p, t1, t2, l1, l2, ao_repr=False, ns_def=True)
         e1 += 2.*np.einsum('klca,klc -> a',l2, t2[:,:,:,p])
         e1 -= np.einsum('klca,lkc -> a',l2, t2[:,:,:,p])
 
-        if ns_def:
-            e2[:,p,:] = -2.*l1
-            e2[:,:,p] += l1
-            e2 += 2.*np.einsum('k,jkba -> jab', t1[:,p], l2)
-            e2 -= np.einsum('k,jkab -> jab', t1[:,p], l2)
-        else:
-            e2[:,:,p] = -l1
-            e2 += np.einsum('k,jkab -> jab', t1[:,p], l2)
+        e2[:,p,:] = -2.*l1
+        e2[:,:,p] += l1
+        e2 += 2.*np.einsum('k,jkba -> jab', t1[:,p], l2)
+        e2 -= np.einsum('k,jkab -> jab', t1[:,p], l2)
 
         b_vecs[:,p+nocc] = amplitudes_to_vector_ea(b1, b2)
         e_vecs[:,p+nocc] = amplitudes_to_vector_ea(e1, e2)
@@ -613,7 +597,7 @@ if __name__ == '__main__':
 #    assert(np.allclose(mom_p[0],-fci_mom_p[0]))
 
     print 'Testing 2-e system... '
-    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2)
+    mom_h = mycc.moms_hole(nmom_max_h=mom_max, l1=l1, l2=l2, ns_def=True)
     mom_p = mycc.moms_part(nmom_max_p=mom_max, l1=l1, l2=l2)
     assert(np.allclose(mom_h[0],-dm1_cc))
     assert(np.allclose(mom_p[0],-CC_part_rdm))
@@ -696,7 +680,9 @@ if __name__ == '__main__':
 
     # Check sum rule for defaul moments
     print 'Testing many-e systems reproduce density matrix...'
-    mom_h = mycc.moms_hole(nmom_max_h=0, l1=l1, l2=l2)
+    mom_h = mycc.moms_hole(nmom_max_h=0, l1=l1, l2=l2, ns_def=True)
+    mom_h_2 = mycc.moms_hole(nmom_max_h=0, l1=l1, l2=l2, ns_def=False)
+    assert(np.allclose(mom_h,mom_h_2))
     mom_p = mycc.moms_part(nmom_max_p=0, l1=l1, l2=l2)
     assert(np.allclose(mom_h[0],-dm1_cc))
     assert(np.allclose(mom_p[0],-CC_part_rdm))

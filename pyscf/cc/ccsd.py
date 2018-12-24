@@ -1022,7 +1022,7 @@ http://sunqm.net/pyscf/code-rule.html#api-rules for the details of API conventio
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
         return ccsd_moms.make_moms_hole(self, nmom_max_h, t1, t2, l1, l2, ao_repr=ao_repr, ns_def=ns_def)
     
-    def moms_part(self, nmom_max_p=1, t1=None, t2=None, l1=None, l2=None, ao_repr=False, ns_def=True):
+    def moms_part(self, nmom_max_p=1, t1=None, t2=None, l1=None, l2=None, ao_repr=False):
         ''' Particle moments up to given order'''
         from pyscf.cc import ccsd_moms
         if t1 is None: t1 = self.t1
@@ -1030,7 +1030,7 @@ http://sunqm.net/pyscf/code-rule.html#api-rules for the details of API conventio
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return ccsd_moms.make_moms_part(self, nmom_max_p, t1, t2, l1, l2, ao_repr=ao_repr, ns_def=ns_def)
+        return ccsd_moms.make_moms_part(self, nmom_max_p, t1, t2, l1, l2, ao_repr=ao_repr)
 
     def ipccsd(self, nroots=1, left=False, koopmans=False, guess=None,
                partition=None, eris=None):
