@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -423,6 +423,9 @@ class KnownValues(unittest.TestCase):
         self.assertAlmostEqual(abs(t2[1]-myucc.t2[1]).max(), 0, 12)
         self.assertAlmostEqual(abs(t2[2]-myucc.t2[2]).max(), 0, 12)
 
+    def test_vector_size(self):
+        self.assertEqual(myucc.vector_size(), 2240)
+
     def test_update_amps2(self):  # compare to gccsd.update_amps
         mol = mol_s2
         mf = mf_s2
@@ -487,6 +490,7 @@ class KnownValues(unittest.TestCase):
 
         eris.focka = numpy.diag(mf.mo_energy[0])
         eris.fockb = numpy.diag(mf.mo_energy[1])
+        eris.mo_energy = mf.mo_energy
 
         t1[0] = t1[0] + numpy.sin(t1[0]) * .05j
         t1[1] = t1[1] + numpy.sin(t1[1]) * .05j
@@ -520,6 +524,7 @@ class KnownValues(unittest.TestCase):
         mo_e[orbspin==0] = mf.mo_energy[0]
         mo_e[orbspin==1] = mf.mo_energy[1]
         erig.fock = numpy.diag(mo_e)
+        erig.mo_energy = mo_e.real
 
         myccg = gccsd.GCCSD(scf.addons.convert_to_ghf(mf))
         t1 = myccg.spatial2spin(t1, orbspin)
@@ -648,6 +653,12 @@ class KnownValues(unittest.TestCase):
         self.assertEqual(mycc.t1[1].size, 0)
         self.assertEqual(mycc.t2[1].size, 0)
         self.assertEqual(mycc.t2[2].size, 0)
+
+    def test_reset(self):
+        mycc = cc.CCSD(scf.UHF(mol).newton())
+        mycc.reset(mol_s2)
+        self.assertTrue(mycc.mol is mol_s2)
+        self.assertTrue(mycc._scf.mol is mol_s2)
 
 
 if __name__ == "__main__":

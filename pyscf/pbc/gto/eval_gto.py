@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -128,10 +128,10 @@ def eval_gto(cell, eval_name, coords, comp=None, kpts=None, kpt=None,
 
     # For atoms near the boundary of the cell, it is necessary (even in low-
     # dimensional systems) to include lattice translations in all 3 dimensions.
-    if cell.low_dim_ft_type == 'analytic_2d_1':
-        Ls = cell.get_lattice_Ls(dimension=3)
-    else:
+    if cell.dimension < 2 or cell.low_dim_ft_type == 'inf_vacuum':
         Ls = cell.get_lattice_Ls(dimension=cell.dimension)
+    else:
+        Ls = cell.get_lattice_Ls(dimension=3)
     Ls = Ls[numpy.argsort(lib.norm(Ls, axis=1))]
     expLk = numpy.exp(1j * numpy.asarray(numpy.dot(Ls, kpts_lst.T), order='C'))
     rcut = _estimate_rcut(cell)
@@ -182,7 +182,7 @@ def _estimate_rcut(cell):
 
 
 if __name__ == '__main__':
-    from pyscf.pbc import gto, dft
+    from pyscf.pbc import gto
     cell = gto.M(a=numpy.eye(3)*4, atom='He 1 1 1', basis=[[2,(1,.5),(.5,.5)]])
     coords = cell.get_uniform_grids([10]*3)
     ao_value = eval_gto(cell, "GTOval_sph", coords, kpts=cell.make_kpts([3]*3))

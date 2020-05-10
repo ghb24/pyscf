@@ -19,7 +19,7 @@ class fake_mp:
 
 class KnownValues(unittest.TestCase):
     def test_no_frozen(self):
-        mp = fake_mp(frozen=0, mo_occ=[np.array([2, 2, 2, 0, 0]),], nkpts=1)
+        mp = fake_mp(frozen=None, mo_occ=[np.array([2, 2, 2, 0, 0]),], nkpts=1)
         nocc = get_nocc(mp)
         nmo = get_nmo(mp)
         self.assertAlmostEqual(nocc, 3)
@@ -55,18 +55,6 @@ class KnownValues(unittest.TestCase):
         self.assertListEqual(nmo, [4, 4])
 
     def test_frozen_list2(self):
-        # Freeze all occupied for the second k-point
-        mp = fake_mp(frozen=[0, 1,], mo_occ=[np.array([2, 2, 2, 0, 0]), np.array([2, 2, 0, 0, 0])], nkpts=2)
-        self.assertRaises(RuntimeError, get_nocc, mp)
-        self.assertRaises(RuntimeError, get_nmo, mp)  # Fails because it pads by calling get_nocc
-        self.assertRaises(RuntimeError, get_nocc, mp, per_kpoint=True)
-        self.assertRaises(RuntimeError, get_nmo, mp, per_kpoint=True)
-
-        # Freeze all virtual at the first k-point
-        mp = fake_mp(frozen=[3, 4], mo_occ=[np.array([2, 2, 2, 0, 0]), np.array([2, 2, 0, 0, 0])], nkpts=2)
-        self.assertRaises(RuntimeError, get_nocc, mp)
-        self.assertRaises(RuntimeError, get_nmo, mp)  # Fails because it pads by calling get_nocc
-
         # Freeze virtual not contained in set
         mp = fake_mp(frozen=[4, 5], mo_occ=[np.array([2, 2, 2, 0, 0]), np.array([2, 2, 0, 0, 0])], nkpts=2)
         self.assertRaises(RuntimeError, get_nocc, mp)
@@ -100,18 +88,6 @@ class KnownValues(unittest.TestCase):
         nmo = get_nmo(mp, per_kpoint=True)
         self.assertListEqual(nocc, [1, 3, 2])
         self.assertListEqual(nmo, [3, 5, 4])
-
-    def test_frozen_kpt_list3(self):
-        mp = fake_mp(frozen=[[0,1,3],[3],[0]], mo_occ=[np.array([2, 2, 2, 0, 0])] * 3, nkpts=3)
-        nocc = get_nocc(mp)
-        nmo = get_nmo(mp)
-        self.assertAlmostEqual(nocc, 3)
-        self.assertAlmostEqual(nmo, 5)  # 2nd k-point has 3 occupied and 2 virtual orbitals
-
-        nocc = get_nocc(mp, per_kpoint=True)
-        nmo = get_nmo(mp, per_kpoint=True)
-        self.assertListEqual(nocc, [1, 3, 2])
-        self.assertListEqual(nmo, [2, 4, 4])
 
     def test_frozen_kpt_list3(self):
         mp = fake_mp(frozen=[[0,1,3],[3],[0]], mo_occ=[np.array([2, 2, 2, 0, 0])] * 3, nkpts=3)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ from pyscf import __config__
 
 libfci = lib.load_library('libfci')
 
+@lib.with_doc(direct_spin1.contract_2e.__doc__)
 def contract_2e(eri, civec_strs, norb, nelec, link_index=None):
     ci_coeff, nelec, ci_strs = _unpack(civec_strs, nelec)
     if link_index is None:
@@ -81,6 +82,13 @@ def contract_2e(eri, civec_strs, norb, nelec, link_index=None):
                                    ctypes.c_int(ma), ctypes.c_int(mlinka),
                                    dd_indexa.ctypes.data_as(ctypes.c_void_p))
 
+    # Adding h_ps below to because contract_2e function computes the
+    # contraction  "E_{pq}E_{rs} V_{pqrs} |CI>" (~ p^+ q r^+ s |CI>) while
+    # the actual contraction for (aa|aa) and (bb|bb) part is
+    # "p^+ r^+ s q V_{pqrs} |CI>". To make (aa|aa) and (bb|bb) code reproduce
+    # "p^+ q r^+ s |CI>", we employ the identity
+    #    p^+ q r^+ s = p^+ r^+ s q  +  delta(qr) p^+ s
+    # the second term is the source of h_ps
     h_ps = numpy.einsum('pqqs->ps', eri)
     eri1 = eri * 2
     for k in range(norb):
@@ -302,12 +310,7 @@ def kernel_fixed_space(myci, h1e, eri, norb, nelec, ci_strs, ci0=None,
                        tol=None, lindep=None, max_cycle=None, max_space=None,
                        nroots=None, davidson_only=None,
                        max_memory=None, verbose=None, ecore=0, **kwargs):
-    if verbose is None:
-        log = logger.Logger(myci.stdout, myci.verbose)
-    elif isinstance(verbose, logger.Logger):
-        log = verbose
-    else:
-        log = logger.Logger(myci.stdout, verbose)
+    log = logger.new_logger(myci, verbose)
     if tol is None: tol = myci.conv_tol
     if lindep is None: lindep = myci.lindep
     if max_cycle is None: max_cycle = myci.max_cycle
@@ -354,12 +357,7 @@ def kernel_float_space(myci, h1e, eri, norb, nelec, ci0=None,
                        tol=None, lindep=None, max_cycle=None, max_space=None,
                        nroots=None, davidson_only=None,
                        max_memory=None, verbose=None, ecore=0, **kwargs):
-    if verbose is None:
-        log = logger.Logger(myci.stdout, myci.verbose)
-    elif isinstance(verbose, logger.Logger):
-        log = verbose
-    else:
-        log = logger.Logger(myci.stdout, verbose)
+    log = logger.new_logger(myci, verbose)
     if tol is None: tol = myci.conv_tol
     if lindep is None: lindep = myci.lindep
     if max_cycle is None: max_cycle = myci.max_cycle
@@ -737,7 +735,7 @@ class SelectedCI(direct_spin1.FCISolver):
         self._strs = None
         keys = set(('ci_coeff_cutoff', 'select_cutoff', 'conv_tol',
                     'start_tol', 'tol_decay_rate'))
-        self._keys = set(self.__dict__.keys()).union(keys)
+        self._keys = self._keys.union(keys)
 
     def dump_flags(self, verbose=None):
         direct_spin1.FCISolver.dump_flags(self, verbose)
@@ -748,7 +746,7 @@ class SelectedCI(direct_spin1.FCISolver):
 # The argument civec_strs is a CI vector in function FCISolver.contract_2e.
 # Save and patch self._strs to make this contract_2e function compatible to
 # FCISolver.contract_2e.
-        if hasattr(civec_strs, '_strs'):
+        if getattr(civec_strs, '_strs', None) is not None:
             self._strs = civec_strs._strs
         else:
             assert(civec_strs.size == len(self._strs[0])*len(self._strs[1]))
@@ -902,12 +900,19 @@ def _all_linkstr_index(ci_strs, norb, nelec):
 class _SCIvector(numpy.ndarray):
     def __array_finalize__(self, obj):
         self._strs = getattr(obj, '_strs', None)
+
+    # Whenever the contents of the array was modified (through ufunc), the tag
+    # should be expired. Overwrite the output of ufunc to restore ndarray type.
+    def __array_wrap__(self, out, context=None):
+        return numpy.ndarray.__array_wrap__(self, out, context).view(numpy.ndarray)
+
 def _as_SCIvector(civec, ci_strs):
     civec = civec.view(_SCIvector)
     civec._strs = ci_strs
     return civec
+
 def _as_SCIvector_if_not(civec, ci_strs):
-    if not hasattr(civec, '_strs'):
+    if getattr(civec, '_strs', None) is None:
         civec = _as_SCIvector(civec, ci_strs)
     return civec
 
@@ -915,7 +920,6 @@ if __name__ == '__main__':
     from functools import reduce
     from pyscf import gto
     from pyscf import scf
-    from pyscf import ao2mo
     from pyscf.fci import spin_op
     from pyscf.fci import addons
 

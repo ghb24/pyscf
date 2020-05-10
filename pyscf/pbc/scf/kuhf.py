@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ from pyscf.pbc.scf import uhf as pbcuhf
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf.pbc.scf import addons
-from pyscf.pbc.scf import chkfile
+from pyscf.pbc.scf import chkfile  # noqa
 from pyscf import __config__
 
 WITH_META_LOWDIN = getattr(__config__, 'pbc_scf_analyze_with_meta_lowdin', True)
@@ -44,7 +44,7 @@ CHECK_COULOMB_IMAG = getattr(__config__, 'pbc_scf_check_coulomb_imag', True)
 canonical_occ = canonical_occ_ = addons.canonical_occ_
 
 
-def make_rdm1(mo_coeff_kpts, mo_occ_kpts):
+def make_rdm1(mo_coeff_kpts, mo_occ_kpts, **kwargs):
     '''Alpha and beta spin one particle density matrices for all k-points.
 
     Returns:
@@ -129,9 +129,7 @@ def get_occ(mf, mo_energy_kpts=None, mo_coeff_kpts=None):
 
     if mo_energy_kpts is None: mo_energy_kpts = mf.mo_energy
 
-    nkpts = len(mo_energy_kpts[0])
-
-    nocc_a = mf.nelec[0] * nkpts
+    nocc_a, nocc_b = mf.nelec
     mo_energy = np.sort(np.hstack(mo_energy_kpts[0]))
     fermi_a = mo_energy[nocc_a-1]
     mo_occ_kpts = [[], []]
@@ -142,8 +140,7 @@ def get_occ(mf, mo_energy_kpts=None, mo_coeff_kpts=None):
     else:
         logger.info(mf, 'alpha HOMO = %.12g  (no LUMO because of small basis) ', fermi_a)
 
-    if mf.nelec[1] > 0:
-        nocc_b = mf.nelec[1] * nkpts
+    if nocc_b > 0:
         mo_energy = np.sort(np.hstack(mo_energy_kpts[1]))
         fermi_b = mo_energy[nocc_b-1]
         for mo_e in mo_energy_kpts[1]:
@@ -184,6 +181,8 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf_kpts=None):
     e1+= 1./nkpts * np.einsum('kij,kji', dm_kpts[1], h1e_kpts)
     e_coul = 1./nkpts * np.einsum('kij,kji', dm_kpts[0], vhf_kpts[0]) * 0.5
     e_coul+= 1./nkpts * np.einsum('kij,kji', dm_kpts[1], vhf_kpts[1]) * 0.5
+    mf.scf_summary['e1'] = e1.real
+    mf.scf_summary['e2'] = e_coul.real
     logger.debug(mf, 'E1 = %s  E_coul = %s', e1, e_coul)
     if CHECK_COULOMB_IMAG and abs(e_coul.imag > mf.cell.precision*10):
         logger.warn(mf, "Coulomb energy has imaginary part %s. "
@@ -194,7 +193,7 @@ def energy_elec(mf, dm_kpts=None, h1e_kpts=None, vhf_kpts=None):
 
 def mulliken_meta(cell, dm_ao_kpts, verbose=logger.DEBUG,
                   pre_orth_method=PRE_ORTH_METHOD, s=None):
-    '''Mulliken population analysis, based on meta-Lowdin AOs.
+    '''A modified Mulliken population analysis, based on meta-Lowdin AOs.
 
     Note this function only computes the Mulliken population for the gamma
     point density matrix.
@@ -203,7 +202,11 @@ def mulliken_meta(cell, dm_ao_kpts, verbose=logger.DEBUG,
     if s is None:
         s = khf.get_ovlp(cell)
     log = logger.new_logger(cell, verbose)
-    log.note('Analyze output for the gamma point')
+    log.note('Analyze output for *gamma point*.')
+    log.info('    To include the contributions from k-points, transform to a '
+             'supercell then run the population analysis on the supercell\n'
+             '        from pyscf.pbc.tools import k2gamma\n'
+             '        k2gamma.k2gamma(mf).mulliken_meta()')
     log.note("KUHF mulliken_meta")
     dm_ao_gamma = dm_ao_kpts[:,0,:,:].real
     s_gamma = s[0,:,:].real
@@ -223,7 +226,7 @@ def canonicalize(mf, mo_coeff_kpts, mo_occ_kpts, fock=None):
     '''
     if fock is None:
         dm = mf.make_rdm1(mo_coeff_kpts, mo_occ_kpts)
-        fock = mf.get_hcore() + mf.get_jk(mf.cell, dm)
+        fock = mf.get_fock(dm=dm)
 
     def eig_(fock, mo_coeff, idx, es, cs):
         if np.count_nonzero(idx) > 0:
@@ -316,7 +319,7 @@ def init_guess_by_chkfile(cell, chkfile_name, project=None, kpts=None):
             occs = ([occa[i] for i in where], [occb[i] for i in where])
             return make_rdm1(mos, occs)
 
-    if hasattr(mo[0], 'ndim') and mo[0].ndim == 2:  # KRHF
+    if getattr(mo[0], 'ndim', None) == 2:  # KRHF
         mo_occa = [(occ>1e-8).astype(np.double) for occ in mo_occ]
         mo_occb = [occ-mo_occa[k] for k,occ in enumerate(mo_occ)]
         dm = makedm((mo, mo), (mo_occa, mo_occb))
@@ -329,7 +332,25 @@ def init_guess_by_chkfile(cell, chkfile_name, project=None, kpts=None):
     return dm
 
 
-class KUHF(pbcuhf.UHF, khf.KSCF):
+def dip_moment(cell, dm_kpts, unit='Debye', verbose=logger.NOTE,
+               grids=None, rho=None, kpts=np.zeros((1,3))):
+    ''' Dipole moment in the unit cell.
+
+    Args:
+         cell : an instance of :class:`Cell`
+
+         dm_kpts (two lists of ndarrays) : KUHF density matrices of k-points
+
+    Return:
+        A list: the dipole moment on x, y and z components
+    '''
+    dm_kpts = dm_kpts[0] + dm_kpts[1]
+    return khf.dip_moment(cell, dm_kpts, unit, verbose, grids, rho, kpts)
+
+get_rho = khf.get_rho
+
+
+class KUHF(khf.KSCF, pbcuhf.UHF):
     '''UHF class with k-point sampling.
     '''
     conv_tol = getattr(__config__, 'pbc_scf_KSCF_conv_tol', 1e-7)
@@ -339,17 +360,34 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
     def __init__(self, cell, kpts=np.zeros((1,3)),
                  exxdiv=getattr(__config__, 'pbc_scf_SCF_exxdiv', 'ewald')):
         khf.KSCF.__init__(self, cell, kpts, exxdiv)
-        self.nelec = cell.nelec
-        self._keys = self._keys.union(['nelec'])
+        self.nelec = None
+        self.init_guess_breaksym = None
+        self._keys = self._keys.union(["init_guess_breaksym"])
 
-    def dump_flags(self):
-        khf.KSCF.dump_flags(self)
+    @property
+    def nelec(self):
+        if self._nelec is not None:
+            return self._nelec
+        else:
+            cell = self.cell
+            nkpts = len(self.kpts)
+            ne = cell.tot_electrons(nkpts)
+            nalpha = (ne + cell.spin) // 2
+            nbeta = nalpha - cell.spin
+            if nalpha + nbeta != ne:
+                raise RuntimeError('Electron number %d and spin %d are not consistent\n'
+                                   'Note cell.spin = 2S = Nalpha - Nbeta, not 2S+1' %
+                                   (ne, cell.spin))
+            return nalpha, nbeta
+    @nelec.setter
+    def nelec(self, x):
+        self._nelec = x
+
+    def dump_flags(self, verbose=None):
+        khf.KSCF.dump_flags(self, verbose)
         logger.info(self, 'number of electrons per unit cell  '
                     'alpha = %d beta = %d', *self.nelec)
         return self
-
-    build = khf.KSCF.build
-    check_sanity = khf.KSCF.check_sanity
 
     def get_init_guess(self, cell=None, key='minao'):
         if cell is None:
@@ -374,7 +412,6 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
             dm = self.init_guess_by_minao(cell)
 
         if dm_kpts is None:
-            nao = dm[0].shape[-1]
             nkpts = len(self.kpts)
             # dm[spin,nao,nao] at gamma point -> dm_kpts[spin,nkpts,nao,nao]
             dm_kpts = np.repeat(dm[:,None,:,:], nkpts, axis=1)
@@ -382,28 +419,27 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
             dm_kpts[1,:] *= 0.99  # To slightly break spin symmetry
             assert dm_kpts.shape[0]==2
 
-        if cell.dimension < 3:
-            ne = np.einsum('xkij,kji->xk', dm_kpts, self.get_ovlp(cell)).real
-            nelec = np.asarray(cell.nelec).reshape(2,1)
-            if np.any(abs(ne - nelec) > 1e-7):
-                logger.warn(self, 'Big error detected in the electron number '
-                            'of initial guess density matrix (Ne/cell = %g)!\n'
-                            '  This can cause huge error in Fock matrix and '
-                            'lead to instability in SCF for low-dimensional '
-                            'systems.\n  DM is normalized to correct number '
-                            'of electrons', ne.mean())
-                dm_kpts *= (nelec/ne).reshape(2,-1,1,1)
+        ne = np.einsum('xkij,kji->x', dm_kpts, self.get_ovlp(cell)).real
+        # FIXME: consider the fractional num_electron or not? This maybe
+        # relates to the charged system.
+        nkpts = len(self.kpts)
+        nelec = np.asarray(self.nelec)
+        if np.any(abs(ne - nelec) > 1e-7*nkpts):
+            logger.debug(self, 'Big error detected in the electron number '
+                        'of initial guess density matrix (Ne/cell = %g)!\n'
+                        '  This can cause huge error in Fock matrix and '
+                        'lead to instability in SCF for low-dimensional '
+                        'systems.\n  DM is normalized wrt the number '
+                        'of electrons %s', ne.mean()/nkpts, nelec/nkpts)
+            dm_kpts *= (nelec / ne).reshape(2,-1,1,1)
         return dm_kpts
 
-    get_hcore = khf.KSCF.get_hcore
-    get_ovlp = khf.KSCF.get_ovlp
-    get_jk = khf.KSCF.get_jk
-    get_j = khf.KSCF.get_j
-    get_k = khf.KSCF.get_k
     get_fock = get_fock
     get_fermi = get_fermi
     get_occ = get_occ
     energy_elec = energy_elec
+
+    get_rho = get_rho
 
     def get_veff(self, cell=None, dm_kpts=None, dm_last=0, vhf_last=0, hermi=1,
                  kpts=None, kpts_band=None):
@@ -441,10 +477,10 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
         e_b, c_b = khf.KSCF.eig(self, h_kpts[1], s_kpts)
         return (e_a,e_b), (c_a,c_b)
 
-    def make_rdm1(self, mo_coeff_kpts=None, mo_occ_kpts=None):
+    def make_rdm1(self, mo_coeff_kpts=None, mo_occ_kpts=None, **kwargs):
         if mo_coeff_kpts is None: mo_coeff_kpts = self.mo_coeff
         if mo_occ_kpts is None: mo_occ_kpts = self.mo_occ
-        return make_rdm1(mo_coeff_kpts, mo_occ_kpts)
+        return make_rdm1(mo_coeff_kpts, mo_occ_kpts, **kwargs)
 
     def get_bands(self, kpts_band, cell=None, dm_kpts=None, kpts=None):
         '''Get energy bands at the given (arbitrary) 'band' k-points.
@@ -479,6 +515,12 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
         if kpts is None: kpts = self.kpts
         return init_guess_by_chkfile(self.cell, chk, project, kpts)
 
+    init_guess_by_1e     = pbcuhf.UHF.init_guess_by_1e
+    init_guess_by_minao  = pbcuhf.UHF.init_guess_by_minao
+    init_guess_by_atom   = pbcuhf.UHF.init_guess_by_atom
+    init_guess_by_huckel = pbcuhf.UHF.init_guess_by_huckel
+
+    @lib.with_doc(mulliken_meta.__doc__)
     def mulliken_meta(self, cell=None, dm=None, verbose=logger.DEBUG,
                       pre_orth_method=PRE_ORTH_METHOD, s=None):
         if cell is None: cell = self.cell
@@ -487,10 +529,18 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
         return mulliken_meta(cell, dm, s=s, verbose=verbose,
                              pre_orth_method=pre_orth_method)
 
-    def dip_moment(self, mol=None, dm=None, unit='Debye', verbose=logger.NOTE,
+    def mulliken_pop(self):
+        raise NotImplementedError
+
+    @lib.with_doc(dip_moment.__doc__)
+    def dip_moment(self, cell=None, dm=None, unit='Debye', verbose=logger.NOTE,
                    **kwargs):
-        # skip dipole memont for crystal
-        return
+        if cell is None: cell = self.cell
+        if dm is None: dm = self.make_rdm1()
+        rho = kwargs.pop('rho', None)
+        if rho is None:
+            rho = self.get_rho(dm)
+        return dip_moment(cell, dm, unit, verbose, rho=rho, kpts=self.kpts, **kwargs)
 
     @lib.with_doc(mol_uhf.spin_square.__doc__)
     def spin_square(self, mo_coeff=None, s=None):
@@ -519,14 +569,6 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
 
     canonicalize = canonicalize
 
-    dump_chk = khf.KSCF.dump_chk
-
-    density_fit = khf.KSCF.density_fit
-    # mix_density_fit inherits from khf.KSCF.mix_density_fit
-
-    newton = khf.KSCF.newton
-    x2c = x2c1e = sfx2c1e = khf.KSCF.sfx2c1e
-
     def stability(self,
                   internal=getattr(__config__, 'pbc_scf_KSCF_stability_internal', True),
                   external=getattr(__config__, 'pbc_scf_KSCF_stability_external', False),
@@ -538,6 +580,10 @@ class KUHF(pbcuhf.UHF, khf.KSCF):
         '''Convert given mean-field object to KUHF'''
         addons.convert_to_uhf(mf, self)
         return self
+
+    def nuc_grad_method(self):
+        from pyscf.pbc.grad import kuhf
+        return kuhf.Gradients(self)
 
 del(WITH_META_LOWDIN, PRE_ORTH_METHOD)
 
@@ -557,4 +603,3 @@ if __name__ == '__main__':
     mf = KUHF(cell, [2,1,1])
     mf.kernel()
     mf.analyze()
-

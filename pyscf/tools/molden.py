@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,8 +34,15 @@ IGNORE_H = getattr(__config__, 'molden_ignore_h', True)
 def orbital_coeff(mol, fout, mo_coeff, spin='Alpha', symm=None, ene=None,
                   occ=None, ignore_h=IGNORE_H):
     from pyscf.symm import label_orb_symm
+    if mol.cart:
+        # pyscf Cartesian GTOs are not normalized. This may not be consistent
+        # with the requirements of molden format. Normalize Cartesian GTOs here
+        norm = mol.intor('int1e_ovlp').diagonal() ** .5
+        mo_coeff = numpy.einsum('i,ij->ij', norm, mo_coeff)
+
     if ignore_h:
         mol, mo_coeff = remove_high_l(mol, mo_coeff)
+
     aoidx = order_ao_index(mol)
     nmo = mo_coeff.shape[1]
     if symm is None:
@@ -67,12 +74,14 @@ def orbital_coeff(mol, fout, mo_coeff, spin='Alpha', symm=None, ene=None,
 
 def from_mo(mol, filename, mo_coeff, spin='Alpha', symm=None, ene=None,
             occ=None, ignore_h=IGNORE_H):
+    '''Dump the given MOs in Molden format'''
     with open(filename, 'w') as f:
         header(mol, f, ignore_h)
         orbital_coeff(mol, f, mo_coeff, spin, symm, ene, occ, ignore_h)
 
 
 def from_scf(mf, filename, ignore_h=IGNORE_H):
+    '''Dump the given SCF object in Molden format'''
     dump_scf(mf, filename, ignore_h)
 def dump_scf(mf, filename, ignore_h=IGNORE_H):
     import pyscf.scf
@@ -142,6 +151,7 @@ _SEC_RE = re.compile(r'\[[^]]+\]')
 
 def _read_one_section(molden_fp):
     sec = [None]
+    last_pos = 0
     while True:
         line = molden_fp.readline()
         if not line:
@@ -226,7 +236,6 @@ def _parse_gto(lines, envs):
 
 def _parse_mo(lines, envs):
     mol = envs['mol']
-    atoms = envs['atoms']
     if not mol._built:
         try:
             mol.build(0, 0)
@@ -238,7 +247,6 @@ def _parse_mo(lines, envs):
     spins = []
     mo_occ = []
     mo_coeff = []
-    norb_alpha = -1
     for line in lines[1:]:
         line = line.upper()
         if 'SYM' in line:
@@ -256,15 +264,13 @@ def _parse_mo(lines, envs):
 
     mo_energy = numpy.array(mo_energy)
     mo_occ = numpy.array(mo_occ)
+    aoidx = numpy.argsort(order_ao_index(mol))
+    mo_coeff = (numpy.array(mo_coeff).T)[aoidx]
     if mol.cart:
-        aoidx = numpy.argsort(order_ao_index(mol, cart=True))
-        mo_coeff = (numpy.array(mo_coeff).T)[aoidx]
-# AO are assumed to be normalized in molpro molden file
+# Cartesian GTOs are normalized in molden format but they are not in pyscf
         s = mol.intor('int1e_ovlp')
         mo_coeff = numpy.einsum('i,ij->ij', numpy.sqrt(1/s.diagonal()), mo_coeff)
-    else:
-        aoidx = numpy.argsort(order_ao_index(mol))
-        mo_coeff = (numpy.array(mo_coeff).T)[aoidx]
+
 
     return mol, mo_energy, mo_coeff, mo_occ, irrep_labels, spins
 
@@ -272,8 +278,6 @@ def _parse_mo(lines, envs):
 def _parse_core(lines, envs):
     mol = envs['mol']
     atoms = envs['atoms']
-    line_id = 1
-    max_lines = len(lines)
     for line in lines[1:]:
         dat = line.split(':')
         if dat[0].strip().isdigit():
@@ -333,8 +337,11 @@ def load(moldenfile, verbose=0):
             elif sec_title in _SEC_PARSER:
                 _SEC_PARSER[sec_title.upper()](lines, tokens)
 
-            elif sec_title in ('5D', '7F', '9G'):
+            elif sec_title[:2] in ('5D', '7F', '9G'):
                 mol.cart = False
+
+            elif sec_title[:2] == '6D' or sec_title[:3] in ('10F', '15G'):
+                mol.cart = True
 
             else:
                 sys.stderr.write('Unknown section %s\n' % sec_title)
@@ -370,6 +377,7 @@ def header(mol, fout, ignore_h=IGNORE_H):
         fout.write('%s   %d   %d   ' % (symb, ia+1, chg))
         coord = mol.atom_coord(ia)
         fout.write('%18.14f   %18.14f   %18.14f\n' % tuple(coord))
+
     fout.write('[GTO]\n')
     for ia, (sh0, sh1, p0, p1) in enumerate(mol.offset_nr_by_atom()):
         fout.write('%d 0\n' %(ia+1))
@@ -384,7 +392,11 @@ def header(mol, fout, ignore_h=IGNORE_H):
                 for ip in range(nprim):
                     fout.write('    %18.14g  %18.14g\n' % (es[ip], cs[ip,ic]))
         fout.write('\n')
-    fout.write('[5d]\n[9g]\n\n')
+
+    if mol.cart:
+        fout.write('[6d]\n[10f]\n[15g]\n')
+    else:
+        fout.write('[5d]\n[7f]\n[9g]\n')
 
     if mol.has_ecp():  # See https://github.com/zorkzou/Molden2AIM
         fout.write('[core]\n')
@@ -394,7 +406,7 @@ def header(mol, fout, ignore_h=IGNORE_H):
                 fout.write('%s : %d\n' % (ia+1, nelec_ecp_core))
     fout.write('\n')
 
-def order_ao_index(mol, cart=False):
+def order_ao_index(mol):
 # reorder d,f,g fucntion to
 #  5D: D 0, D+1, D-1, D+2, D-2
 #  6D: xx, yy, zz, xy, xz, yz
@@ -406,7 +418,7 @@ def order_ao_index(mol, cart=False):
 # 15G: xxxx yyyy zzzz xxxy xxxz yyyx yyyz zzzx zzzy xxyy xxzz yyzz xxyz yyxz zzxy
     idx = []
     off = 0
-    if cart:
+    if mol.cart:
         for ib in range(mol.nbas):
             l = mol.bas_angular(ib)
             for n in range(mol.bas_nctr(ib)):
@@ -463,14 +475,19 @@ def remove_high_l(mol, mo_coeff=None):
     if mo_coeff is None:
         return pmol, None
     else:
-        k = 0
+        p1 = 0
         idx = []
         for ib in range(mol.nbas):
             l = mol.bas_angular(ib)
             nc = mol.bas_nctr(ib)
+            if mol.cart:
+                nd = (l + 1) * (l + 2) // 2
+            else:
+                nd = l * 2 + 1
+            p0, p1 = p1, p1 + nd * nc
             if l <= 4:
-                idx.append(range(k, k+(l*2+1)*nc))
-            k += (l*2+1) * nc
+                idx.append(range(p0, p1))
+
         idx = numpy.hstack(idx)
         return pmol, mo_coeff[idx]
 

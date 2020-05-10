@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,9 +26,7 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.scf import dhf
 from pyscf.dft import rks
-from pyscf.dft import gen_grid
 from pyscf.dft import r_numint
-from pyscf import __config__
 
 
 def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
@@ -76,7 +74,9 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
     if hermi == 2:  # because rho = 0
         n, exc, vxc = 0, 0, 0
     else:
-        n, exc, vxc = ks._numint.r_vxc(mol, ks.grids, ks.xc, dm, hermi=hermi)
+        max_memory = ks.max_memory - lib.current_memory()[0]
+        n, exc, vxc = ks._numint.r_vxc(mol, ks.grids, ks.xc, dm, hermi=hermi,
+                                       max_memory=max_memory)
         logger.debug(ks, 'nelec by numeric integration = %s', n)
         t0 = logger.timer(ks, 'vxc', *t0)
 
@@ -92,22 +92,31 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             vj = ks.get_j(mol, dm, hermi)
         vxc += vj
     else:
-#        if (ks._eri is None and ks.direct_scf and
-#            getattr(vhf_last, 'vk', None) is not None):
-#            ddm = numpy.asarray(dm) - numpy.asarray(dm_last)
-#            vj, vk = ks.get_jk(mol, ddm, hermi)
-#            vj += vhf_last.vj
-#            vk += vhf_last.vk
-#        else:
-#            vj, vk = ks.get_jk(mol, dm, hermi)
-#        vxc += vj - vk * hyb
-#
-#        if ground_state:
-#            exc -= numpy.einsum('ij,ji', dm, vk) * hyb * .5
-        raise NotImplementedError
+        if (ks._eri is None and ks.direct_scf and
+            getattr(vhf_last, 'vk', None) is not None):
+            ddm = numpy.asarray(dm) - numpy.asarray(dm_last)
+            vj, vk = ks.get_jk(mol, ddm, hermi)
+            vk *= hyb
+            if abs(omega) > 1e-10:  # For range separated Coulomb operator
+                vklr = ks.get_k(mol, ddm, hermi, omega=omega)
+                vklr *= (alpha - hyb)
+                vk += vklr
+            vj += vhf_last.vj
+            vk += vhf_last.vk
+        else:
+            vj, vk = ks.get_jk(mol, dm, hermi)
+            vk *= hyb
+            if abs(omega) > 1e-10:
+                vklr = ks.get_k(mol, dm, hermi, omega=omega)
+                vklr *= (alpha - hyb)
+                vk += vklr
+        vxc += vj - vk
+
+        if ground_state:
+            exc -= numpy.einsum('ij,ji', dm, vk).real * hyb * .5
 
     if ground_state:
-        ecoul = numpy.einsum('ij,ji', dm, vj) * .5
+        ecoul = numpy.einsum('ij,ji', dm, vj).real * .5
     else:
         ecoul = None
 
@@ -115,34 +124,22 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
     return vxc
 
 
-def energy_elec(ks, dm=None, h1e=None, vhf=None):
-    return rks.energy_elec(ks, dm, h1e, vhf)
+energy_elec = rks.energy_elec
 
 
-class UKS(dhf.UHF):
-    def __init__(self, mol):
+class UKS(rks.KohnShamDFT, dhf.UHF):
+    def __init__(self, mol, xc='LDA,VWN'):
         dhf.UHF.__init__(self, mol)
-        self.xc = 'LDA,VWN'
-        self.grids = gen_grid.Grids(self.mol)
-        self.grids.level = getattr(__config__, 'dft_rks_RKS_grids_level',
-                                   self.grids.level)
-        # Use rho to filter grids
-        self.small_rho_cutoff = getattr(__config__, 'dft_rks_RKS_small_rho_cutoff',
-                                        1e-7)
-##################################################
-# don't modify the following attributes, they are not input options
+        rks.KohnShamDFT.__init__(self, xc)
         self._numint = r_numint.RNumInt()
-        self._keys = self._keys.union(['xc', 'grids', 'small_rho_cutoff'])
 
-    def dump_flags(self):
-        dhf.UHF.dump_flags(self)
-        logger.info(self, 'XC functionals = %s', self.xc)
-        logger.info(self, 'small_rho_cutoff = %g', self.small_rho_cutoff)
-        self.grids.dump_flags()
+    def dump_flags(self, verbose=None):
+        dhf.UHF.dump_flags(self, verbose)
+        rks.KohnShamDFT.dump_flags(self, verbose)
+        return self
 
     get_veff = get_veff
     energy_elec = energy_elec
-    define_xc_ = rks.define_xc_
 
     def x2c1e(self):
         from pyscf.x2c import x2c

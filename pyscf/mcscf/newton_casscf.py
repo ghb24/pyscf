@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,25 +20,23 @@
 Second order CASSCF
 '''
 
-import sys
 import time
 import copy
 from functools import reduce
 import numpy
-import scipy.linalg
 from pyscf import lib
 from pyscf.lib import logger
-from pyscf.mcscf import casci, mc1step
+from pyscf.mcscf import casci, mc1step, addons
 from pyscf.mcscf.casci import get_fock, cas_natorb, canonicalize
-from pyscf.mcscf import chkfile
-from pyscf import ao2mo
 from pyscf import scf
 from pyscf.soscf import ciah
-from pyscf import fci
 
 
 # gradients, hessian operator and hessian diagonal
 def gen_g_hop(casscf, mo, ci0, eris, verbose=None):
+    # MRH 04/08/2019: punt to state-average wrapper if necessary
+    if isinstance (casscf, addons.StateAverageMCSCFSolver):
+        return _sa_gen_g_hop (casscf, mo, ci0, eris, verbose)
     ncas = casscf.ncas
     ncore = casscf.ncore
     nocc = ncas + ncore
@@ -46,7 +44,7 @@ def gen_g_hop(casscf, mo, ci0, eris, verbose=None):
     nmo = mo.shape[1]
     ci0 = ci0.ravel()
 
-    if hasattr(casscf.fcisolver, 'gen_linkstr'):
+    if getattr(casscf.fcisolver, 'gen_linkstr', None):
         linkstrl = casscf.fcisolver.gen_linkstr(ncas, nelecas, True)
         linkstr  = casscf.fcisolver.gen_linkstr(ncas, nelecas, False)
     else:
@@ -290,11 +288,52 @@ def gen_g_hop(casscf, mo, ci0, eris, verbose=None):
 
     return g_all, g_update, h_op, hdiag_all
 
+def _sa_gen_g_hop(casscf, mo, ci0, eris, verbose=None):
+    ''' MRH, 04/08/2019: This is a thin wrapper around the original gen_g_hop to weight and average the derivatives
+        in the second-order algorithm for a SA-CASSCF calculation. '''
+    ngorb = numpy.count_nonzero (casscf.uniq_var_indices (mo.shape[1], casscf.ncore, casscf.ncas, casscf.frozen))
+    nroots = casscf.fcisolver.nroots
+    fcasscf = casscf._base_class (casscf._scf, casscf.ncas, casscf.nelecas)
+    fcasscf.fcisolver = casscf.fcisolver._base_class (casscf.mol)
+    fcasscf.mo_coeff = mo
+    # MRH, 07/23/2019: make sure to inherit symmetry!
+    if hasattr (casscf.fcisolver, 'orbsym'):
+        fcasscf.fcisolver.orbsym = casscf.fcisolver.orbsym
+    if hasattr (casscf.fcisolver, 'wfnsym'):
+        fcasscf.fcisolver.wfnsym = casscf.fcisolver.wfnsym
+
+    # Warning: do not call gen_g_hop from here with casscf: infinite recursion danger
+    gh_roots = [gen_g_hop (fcasscf, mo, ci0_i, eris, verbose=verbose) for ci0_i in ci0]
+    def avg_orb_wgt_ci (x_roots):
+        x_orb = sum ([x_iroot[:ngorb] * w for x_iroot, w in zip (x_roots, casscf.weights)])
+        x_ci = numpy.stack ([x_iroot[ngorb:] * w for x_iroot, w in zip (x_roots, casscf.weights)], axis=0)
+        x_all = numpy.append (x_orb, x_ci.ravel ()).ravel ()
+        return x_all
+
+    g_all = avg_orb_wgt_ci ([gh_iroot[0] for gh_iroot in gh_roots])
+    hdiag_all = avg_orb_wgt_ci ([gh_iroot[3] for gh_iroot in gh_roots])
+
+    def g_update (u, fcivec):
+        return avg_orb_wgt_ci ([gh_iroot[1] (u, ci) for gh_iroot, ci in zip (gh_roots, fcivec)])
+
+    def h_op (x):
+        x_orb = x[:ngorb]
+        x_ci = x[ngorb:].reshape (nroots, -1)
+        return avg_orb_wgt_ci ([gh_iroot[2] (numpy.append (x_orb, x_ci_iroot))
+            for gh_iroot, x_ci_iroot in zip (gh_roots, x_ci)])
+
+    return g_all, g_update, h_op, hdiag_all
+
+# MRH, 04/08/2019: enable multiple roots
 def extract_rotation(casscf, dr, u, ci0):
-    ngorb = dr.size - ci0.size
+    nroots = casscf.fcisolver.nroots
+    nmo = casscf.mo_coeff.shape[1]
+    ngorb = numpy.count_nonzero (casscf.uniq_var_indices (nmo, casscf.ncore, casscf.ncas, casscf.frozen))
     u = numpy.dot(u, casscf.update_rotate_matrix(dr[:ngorb]))
-    ci1 = ci0.ravel() + dr[ngorb:]
-    ci1 *= 1./numpy.linalg.norm(ci1)
+    ci1 = (numpy.asarray (ci0).ravel() + dr[ngorb:]).reshape (nroots, -1)
+    ci1 *= 1./numpy.linalg.norm(ci1, axis=1)[:,None]
+    ci1 = [ci1[iroot].ravel () for iroot in range (nroots)]
+    if nroots == 1: ci1 = ci1[0]
     return u, ci1
 
 def update_orb_ci(casscf, mo, ci0, eris, x0_guess=None,
@@ -304,9 +343,13 @@ def update_orb_ci(casscf, mo, ci0, eris, x0_guess=None,
         max_stepsize = casscf.max_stepsize
 
     nmo = mo.shape[1]
-    ci0 = ci0.ravel()
+    # MRH, 04/08/2019: enable multiple roots
+    if casscf.fcisolver.nroots == 1:
+        ci0 = ci0.ravel ()
+    else:
+        ci0 = [c.ravel () for c in ci0]
     g_all, g_update, h_op, h_diag = gen_g_hop(casscf, mo, ci0, eris)
-    ngorb = g_all.size - ci0.size
+    ngorb = numpy.count_nonzero (casscf.uniq_var_indices (nmo, casscf.ncore, casscf.ncas, casscf.frozen))
     g_kf = g_all
     norm_gkf = norm_gall = numpy.linalg.norm(g_all)
     log.debug('    |g|=%5.3g (%4.3g %4.3g) (keyframe)', norm_gall,
@@ -423,7 +466,7 @@ def update_orb_ci(casscf, mo, ci0, eris, x0_guess=None,
     log.debug('    tot inner=%d  |g|= %4.3g (%4.3g %4.3g) |u-1|= %4.3g  |dci|= %4.3g',
               stat.imic, norm_gall, norm_gorb, norm_gci,
               numpy.linalg.norm(u-numpy.eye(nmo)),
-              numpy.linalg.norm(ci_kf-ci0))
+              numpy.linalg.norm(numpy.asarray(ci_kf)-numpy.asarray(ci0)))
     return u, ci_kf, norm_gkf, stat, dxi
 
 
@@ -433,7 +476,7 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
     '''
     log = logger.new_logger(casscf, verbose)
     log.warn('SO-CASSCF (Second order CASSCF) is an experimental feature. '
-             'It has bad performance for large system.')
+             'Its performance is bad for large systems.')
 
     cput0 = (time.clock(), time.time())
     log.debug('Start SO-CASSCF (newton CASSCF)')
@@ -509,6 +552,9 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
                 casscf.canonicalize(mo, fcivec, eris, casscf.sorting_mo_energy,
                                     casscf.natorb, casdm1, log)
         if casscf.natorb: # dump_chk may save casdm1
+            ncas = casscf.ncas
+            ncore = casscf.ncore
+            nocc = ncas + ncore
             occ, ucas = casscf._eig(-casdm1, ncore, nocc)
             casdm1 = -occ
 
@@ -600,8 +646,8 @@ class CASSCF(mc1step.CASSCF):
     >>> mc.kernel()[0]
     -109.044401882238134
     '''
-    def __init__(self, mf, ncas, nelecas, ncore=None, frozen=None):
-        casci.CASCI.__init__(self, mf, ncas, nelecas, ncore)
+    def __init__(self, mf_or_mol, ncas, nelecas, ncore=None, frozen=None):
+        casci.CASCI.__init__(self, mf_or_mol, ncas, nelecas, ncore)
         self.frozen = frozen
 # the max orbital rotation and CI increment, prefer small step size
         self.max_stepsize = .03
@@ -621,7 +667,7 @@ class CASSCF(mc1step.CASSCF):
         self.kf_trust_region = 3.
         self.kf_interval = 5
         self.internal_rotation = False
-        self.chkfile = mf.chkfile
+        self.chkfile = self._scf.chkfile
 
         self.callback = None
         self.chk_ci = False
@@ -634,21 +680,23 @@ class CASSCF(mc1step.CASSCF):
         self.e_tot = None
         self.e_cas = None
         self.ci = None
-        self.mo_coeff = mf.mo_coeff
-        self.mo_energy = mf.mo_energy
+        self.mo_coeff = self._scf.mo_coeff
+        self.mo_energy = self._scf.mo_energy
         self.converged = False
         self._max_stepsize = None
 
         self._keys = set(self.__dict__.keys())
 
-    def dump_flags(self):
-        log = logger.Logger(self.stdout, self.verbose)
+    def dump_flags(self, verbose=None):
+        log = logger.new_logger(self, verbose)
         log.info('')
-        log.info('******** %s flags ********', self.__class__)
-        nvir = self.mo_coeff.shape[1] - self.ncore - self.ncas
+        log.info('******** %s ********', self.__class__)
+        ncore = self.ncore
+        ncas = self.ncas
+        nvir = self.mo_coeff.shape[1] - ncore - ncas
         log.info('CAS (%de+%de, %do), ncore = %d, nvir = %d', \
-                 self.nelecas[0], self.nelecas[1], self.ncas, self.ncore, nvir)
-        assert(nvir > 0 and self.ncore > 0 and self.ncas > 0)
+                 self.nelecas[0], self.nelecas[1], self.ncas, ncore, nvir)
+        assert(nvir > 0 and ncore > 0 and self.ncas > 0)
         if self.frozen is not None:
             log.info('frozen orbitals %s', str(self.frozen))
         log.info('max_cycle_macro = %d', self.max_cycle_macro)
@@ -700,7 +748,7 @@ class CASSCF(mc1step.CASSCF):
         if envs is not None and log.verbose >= logger.INFO:
             log.debug('CAS space CI energy = %.15g', e_cas)
 
-            if hasattr(self.fcisolver,'spin_square'):
+            if getattr(self.fcisolver, 'spin_square', None):
                 ss = self.fcisolver.spin_square(fcivec, self.ncas, self.nelecas)
             else:
                 ss = None
@@ -739,9 +787,7 @@ class CASSCF(mc1step.CASSCF):
 
 if __name__ == '__main__':
     from pyscf import gto
-    from pyscf import scf
     import pyscf.fci
-    from pyscf.mcscf import addons
 
     mol = gto.Mole()
     mol.verbose = 0

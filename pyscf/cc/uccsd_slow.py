@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ from pyscf import ao2mo
 from pyscf.lib import logger
 from pyscf.cc import ccsd
 from pyscf.cc import uccsd
+from pyscf.mp import ump2
 from pyscf.cc import gintermediates as imd
 
 #einsum = np.einsum
@@ -81,7 +82,7 @@ def update_amps(cc, t1, t2, eris):
     t2new -= (tmp - tmp.transpose(0,1,3,2))
 
     mo_e = eris.fock.diagonal()
-    eia = mo_e[:nocc,None] - mo_e[None,nocc:]
+    eia = mo_e[:nocc,None] - mo_e[None,nocc:] - cc.level_shift
     eijab = lib.direct_sum('ia,jb->ijab', eia, eia)
     t1new /= eia
     t2new /= eijab
@@ -98,9 +99,12 @@ def energy(cc, t1, t2, eris):
     return e.real
 
 
+get_frozen_mask = ump2.get_frozen_mask
+
+
 class UCCSD(ccsd.CCSD):
 
-    def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
         # Spin-orbital CCSD needs a stricter tolerance than spatial-orbital
         self.conv_tol_normt = 1e-6
@@ -117,6 +121,7 @@ class UCCSD(ccsd.CCSD):
 
     get_nocc = uccsd.get_nocc
     get_nmo = uccsd.get_nmo
+    get_frozen_mask = get_frozen_mask
 
     def init_amps(self, eris):
         time0 = time.clock(), time.time()
@@ -154,7 +159,7 @@ class UCCSD(ccsd.CCSD):
         return ccsd.CCSD.ccsd(self, t1, t2, eris)
 
     def ao2mo(self, mo_coeff=None):
-        return _ChemistsERIs(self, mo_coeff)
+        return _PhysicistsERIs(self, mo_coeff)
 
     def update_amps(self, t1, t2, eris):
         return update_amps(self, t1, t2, eris)
@@ -179,7 +184,7 @@ class UCCSD(ccsd.CCSD):
 
     def ipccsd_matvec(self, vector):
         # Ref: Tu, Wang, and Li, J. Chem. Phys. 136, 174102 (2012) Eqs.(8)-(9)
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ip_imds:
             self.imds.make_ip()
@@ -205,7 +210,7 @@ class UCCSD(ccsd.CCSD):
         return vector
 
     def ipccsd_diag(self):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ip_imds:
             self.imds.make_ip()
@@ -261,7 +266,7 @@ class UCCSD(ccsd.CCSD):
 
     def eaccsd_matvec(self,vector):
         # Ref: Nooijen and Bartlett, J. Chem. Phys. 102, 3629 (1994) Eqs.(30)-(31)
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ea_imds:
             self.imds.make_ea()
@@ -289,7 +294,7 @@ class UCCSD(ccsd.CCSD):
         return vector
 
     def eaccsd_diag(self):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ea_imds:
             self.imds.make_ea()
@@ -348,7 +353,7 @@ class UCCSD(ccsd.CCSD):
         # Ref: Wang, Tu, and Wang, J. Chem. Theory Comput. 10, 5567 (2014) Eqs.(9)-(10)
         # Note: Last line in Eq. (10) is superfluous.
         # See, e.g. Gwaltney, Nooijen, and Barlett, Chem. Phys. Lett. 248, 189 (1996)
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ee_imds:
             self.imds.make_ee()
@@ -386,7 +391,7 @@ class UCCSD(ccsd.CCSD):
         return vector
 
     def eeccsd_diag(self):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ee_imds:
             self.imds.make_ee()
@@ -476,7 +481,7 @@ class UCCSD(ccsd.CCSD):
         return t1s, t2s
 
 
-class _ChemistsERIs:
+class _PhysicistsERIs:
     def __init__(self, cc, mo_coeff=None, method='incore',
                  ao2mofn=ao2mo.outcore.general_iofree):
         cput0 = (time.clock(), time.time())
@@ -612,14 +617,13 @@ def uspatial2spin(cc, moidx, mo_coeff):
     nocc = cc.nocc
     nao = cc.mo_coeff[0].shape[0]
     nmo = cc.nmo
-    nvir = nmo - nocc
     so_coeff = np.zeros((nao, nmo), dtype=mo_coeff[0].dtype)
     nocc_a = int(sum(cc.mo_occ[0]*moidx[0]))
     nocc_b = int(sum(cc.mo_occ[1]*moidx[1]))
     nmo_a = fockab[0].shape[0]
     nmo_b = fockab[1].shape[0]
     nvir_a = nmo_a - nocc_a
-    nvir_b = nmo_b - nocc_b
+    #nvir_b = nmo_b - nocc_b
     oa = range(0,nocc_a)
     ob = range(nocc_a,nocc)
     va = range(nocc,nocc+nvir_a)

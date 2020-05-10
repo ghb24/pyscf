@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #
 
 import ctypes
-import tempfile
 import numpy
 import h5py
 from pyscf import lib
@@ -38,17 +37,20 @@ class load(object):
 
     def __enter__(self):
         if isinstance(self.eri, str):
-            self.feri = h5py.File(self.eri, 'r')
-            return self.feri[self.dataname]
+            feri = self.feri = h5py.File(self.eri, 'r')
         elif isinstance(self.eri, h5py.Group):
-            return self.eri[self.dataname]
+            feri = self.eri
         elif isinstance(getattr(self.eri, 'name', None), str):
-            self.feri = h5py.File(self.eri.name)
-            return self.feri[self.dataname]
+            feri = self.feri = h5py.File(self.eri.name, 'r')
         elif isinstance(self.eri, numpy.ndarray):
             return self.eri
         else:
             raise RuntimeError('Unknown eri type %s', type(self.eri))
+
+        if self.dataname is None:
+            return feri
+        else:
+            return feri[self.dataname]
 
     def __exit__(self, type, value, traceback):
         if self.feri is not None:

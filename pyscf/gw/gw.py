@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,12 +21,10 @@
 G0W0 approximation
 '''
 
-from functools import reduce
 import time
-import tempfile
+from functools import reduce
 import numpy
 import numpy as np
-import h5py
 from scipy.optimize import newton
 
 from pyscf import lib
@@ -54,7 +52,7 @@ def kernel(gw, mo_energy, mo_coeff, td_e, td_xy, eris=None,
                            dft.roks.ROKS    , dft.uks.UKS,
                            dft.rks_symm.RKS , dft.uks_symm.UKS,
                            dft.rks_symm.ROKS, dft.uks_symm.UKS)))
-    assert(gw.frozen is 0 or gw.frozen is None)
+    assert(gw.frozen == 0 or gw.frozen is None)
 
     if eris is None:
         eris = gw.ao2mo(mo_coeff)
@@ -148,7 +146,7 @@ class GW(lib.StreamObject):
     eta = getattr(__config__, 'gw_gw_GW_eta', 1e-3)
     linearized = getattr(__config__, 'gw_gw_GW_linearized', False)
 
-    def __init__(self, mf, tdmf, frozen=0):
+    def __init__(self, mf, tdmf, frozen=None):
         self.mol = mf.mol
         self._scf = mf
         self._tdscf = tdmf
@@ -156,9 +154,7 @@ class GW(lib.StreamObject):
         self.stdout = self.mol.stdout
         self.max_memory = mf.max_memory
 
-        #TODO: implement frozen orbs
-        #self.frozen = frozen
-        self.frozen = 0
+        self.frozen = frozen
 
 ##################################################
 # don't modify the following attributes, they are not input options
@@ -171,15 +167,15 @@ class GW(lib.StreamObject):
         keys = set(('eta', 'linearized'))
         self._keys = set(self.__dict__.keys()).union(keys)
 
-    def dump_flags(self):
-        log = logger.Logger(self.stdout, self.verbose)
+    def dump_flags(self, verbose=None):
+        log = logger.new_logger(self, verbose)
         log.info('')
-        log.info('******** %s flags ********', self.__class__)
+        log.info('******** %s ********', self.__class__)
         log.info('method = %s', self.__class__.__name__)
         nocc = self.nocc
         nvir = self.nmo - nocc
         log.info('GW nocc = %d, nvir = %d', nocc, nvir)
-        if self.frozen is not 0:
+        if self.frozen is not None:
             log.info('frozen orbitals %s', str(self.frozen))
         logger.info(self, 'use perturbative linearized QP eqn = %s', self.linearized)
         return self
@@ -232,6 +228,13 @@ class GW(lib.StreamObject):
         logger.timer(self, 'GW', *cput0)
         return self.mo_energy
 
+    def reset(self, mol=None):
+        if mol is not None:
+            self.mol = mol
+        self._scf.reset(mol)
+        self._tdscf.reset(mol)
+        return self
+
     def ao2mo(self, mo_coeff=None):
         nmo = self.nmo
         nao = self.mo_coeff.shape[0]
@@ -243,7 +246,7 @@ class GW(lib.StreamObject):
             (mem_incore+mem_now < self.max_memory) or self.mol.incore_anyway):
             return _make_eris_incore(self, mo_coeff)
 
-        elif hasattr(self._scf, 'with_df'):
+        elif getattr(self._scf, 'with_df', None):
             logger.warn(self, 'GW detected DF being used in the HF object. '
                         'MO integrals are computed based on the DF 3-index tensors.\n'
                         'Developer TODO:  Write dfgw.GW for the '
@@ -365,7 +368,7 @@ def _make_eris_outcore(mycc, mo_coeff=None):
 
 
 if __name__ == '__main__':
-    from pyscf import gto, dft, tddft
+    from pyscf import gto, tddft
     mol = gto.Mole()
     mol.verbose = 5
     mol.atom = [

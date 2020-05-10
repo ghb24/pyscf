@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ def prenao(mol, dm):
         # UHF or ROHF
         dm = dm[0] + dm[1]
 
-    if hasattr(mol, 'pbc_intor'):  # whether mol object is a cell
+    if getattr(mol, 'pbc_intor', None):  # whether mol object is a cell
         s = mol.pbc_intor('int1e_ovlp', hermi=1)
     else:
         s = mol.intor_symmetric('int1e_ovlp')
@@ -59,7 +59,7 @@ def prenao(mol, dm):
 
 def nao(mol, mf, s=None, restore=True):
     if s is None:
-        if hasattr(mol, 'pbc_intor'):  # whether mol object is a cell
+        if getattr(mol, 'pbc_intor', None):  # whether mol object is a cell
             s = mol.pbc_intor('int1e_ovlp', hermi=1)
         else:
             s = mol.intor_symmetric('int1e_ovlp')
@@ -116,7 +116,7 @@ def _prenao_sub(mol, p, s):
 
 def _nao_sub(mol, pre_occ, pre_nao, s=None):
     if s is None:
-        if hasattr(mol, 'pbc_intor'):  # whether mol object is a cell
+        if getattr(mol, 'pbc_intor', None):  # whether mol object is a cell
             s = mol.pbc_intor('int1e_ovlp', hermi=1)
         else:
             s = mol.intor_symmetric('int1e_ovlp')
@@ -165,7 +165,7 @@ def _core_val_ryd_list(mol):
         nuc = mole.charge(mol.atom_symbol(ia))
         l = mol.bas_angular(ib)
         nc = mol.bas_nctr(ib)
-        symb = mol.atom_symbol(ia)
+
         nelec_ecp = mol.atom_nelec_core(ia)
         ecpcore = core_configuration(nelec_ecp)
         coreshell = [int(x) for x in AOSHELL[nuc][0][::2]]
@@ -244,7 +244,6 @@ def set_atom_conf(element, description):
 
 if __name__ == "__main__":
     from pyscf import gto
-    from pyscf import scf
     mol = gto.Mole()
     mol.verbose = 1
     mol.output = 'out_nao'

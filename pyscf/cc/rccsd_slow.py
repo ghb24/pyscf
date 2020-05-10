@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -149,17 +149,16 @@ def energy(cc, t1, t2, eris):
 
 class RCCSD(ccsd.CCSD):
 
-    def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
         self.max_space = 20
         self._keys = self._keys.union(['max_space'])
 
-    def dump_flags(self):
-        ccsd.CCSD.dump_flags(self)
+    def dump_flags(self, verbose=None):
+        ccsd.CCSD.dump_flags(self, verbose)
 
     def init_amps(self, eris):
         nocc = self.nocc
-        nvir = self.nmo - nocc
         mo_e = eris.fock.diagonal().real
         eia = mo_e[:nocc,None] - mo_e[None,nocc:]
         eijab = lib.direct_sum('ia,jb->ijab', eia, eia)
@@ -297,7 +296,7 @@ class RCCSD(ccsd.CCSD):
             def pickeig(w, v, nr, envs):
                 x0 = linalg_helper._gen_x0(envs['v'], envs['xs'])
                 idx = np.argmax( np.abs(np.dot(np.array(guess).conj(),np.array(x0).T)), axis=1 )
-                return w[idx].real, v[:,idx].real, idx
+                return lib.linalg_helper._eigs_cmplx2real(w, v, idx)
             eip, evecs = eig(matvec, guess, precond, pick=pickeig,
                              tol=self.conv_tol, max_cycle=self.max_cycle,
                              max_space=self.max_space, nroots=nroots, verbose=self.verbose)
@@ -321,7 +320,7 @@ class RCCSD(ccsd.CCSD):
 
     def ipccsd_matvec(self, vector):
         # Ref: Nooijen and Snijders, J. Chem. Phys. 102, 1681 (1995) Eqs.(8)-(9)
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ip_imds:
             self.imds.make_ip(self.ip_partition)
@@ -367,7 +366,7 @@ class RCCSD(ccsd.CCSD):
         return vector
 
     def lipccsd_matvec(self, vector):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ip_imds:
             self.imds.make_ip(self.ip_partition)
@@ -413,7 +412,7 @@ class RCCSD(ccsd.CCSD):
         return vector
 
     def ipccsd_diag(self):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ip_imds:
             self.imds.make_ip(self.ip_partition)
@@ -465,14 +464,14 @@ class RCCSD(ccsd.CCSD):
         vector[nocc:] = r2.copy().reshape(nocc*nocc*nvir)
         return vector
 
-    def ipccsd_star(self, ipccsd_evals, ipccsd_evecs, lipccsd_evecs):
+    def ipccsd_star_contract(self, ipccsd_evals, ipccsd_evecs, lipccsd_evecs):
         assert(self.ip_partition == None)
         t1,t2,eris = self.t1, self.t2, self.eris
         fock = eris.fock
         nocc = self.nocc
         nvir = self.nmo - nocc
 
-        fov = fock[:nocc,nocc:]
+        #fov = fock[:nocc,nocc:]
         foo = fock[:nocc,:nocc]
         fvv = fock[nocc:,nocc:]
 
@@ -582,7 +581,7 @@ class RCCSD(ccsd.CCSD):
             def pickeig(w, v, nr, envs):
                 x0 = linalg_helper._gen_x0(envs['v'], envs['xs'])
                 idx = np.argmax( np.abs(np.dot(np.array(guess).conj(),np.array(x0).T)), axis=1 )
-                return w[idx].real, v[:,idx].real, idx
+                return lib.linalg_helper._eigs_cmplx2real(w, v, idx)
             eea, evecs = eig(matvec, guess, precond, pick=pickeig,
                              tol=self.conv_tol, max_cycle=self.max_cycle,
                              max_space=self.max_space, nroots=nroots, verbose=self.verbose)
@@ -607,7 +606,7 @@ class RCCSD(ccsd.CCSD):
 
     def eaccsd_matvec(self,vector):
         # Ref: Nooijen and Bartlett, J. Chem. Phys. 102, 3629 (1994) Eqs.(30)-(31)
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ea_imds:
             self.imds.make_ea(self.ea_partition)
@@ -660,7 +659,7 @@ class RCCSD(ccsd.CCSD):
         # Small changes were made so that the same type L2 basis was used for both the
         # left EA and left IP equations.  You will note more similarity for these
         # equations to the left IP equations than for the left EA equations by Nooijen.
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ea_imds:
             self.imds.make_ea(self.ea_partition)
@@ -709,7 +708,7 @@ class RCCSD(ccsd.CCSD):
         return vector
 
     def eaccsd_diag(self):
-        if not hasattr(self,'imds'):
+        if not getattr(self, 'imds', None):
             self.imds = _IMDS(self)
         if not self.imds.made_ea_imds:
             self.imds.make_ea(self.ea_partition)
@@ -764,14 +763,14 @@ class RCCSD(ccsd.CCSD):
         vector[nvir:] = r2.copy().reshape(nocc*nvir*nvir)
         return vector
 
-    def eaccsd_star(self, eaccsd_evals, eaccsd_evecs, leaccsd_evecs):
+    def eaccsd_star_contract(self, eaccsd_evals, eaccsd_evecs, leaccsd_evecs):
         assert(self.ea_partition == None)
         t1,t2,eris = self.t1, self.t2, self.eris
         fock = eris.fock
         nocc = self.nocc
         nvir = self.nmo - nocc
 
-        fov = fock[:nocc,nocc:]
+        #fov = fock[:nocc,nocc:]
         foo = fock[:nocc,:nocc]
         fvv = fock[nocc:,nocc:]
 
@@ -781,7 +780,7 @@ class RCCSD(ccsd.CCSD):
         ooov = _cp(eris.ooov)
         vooo = ooov.conj().transpose(3,2,1,0)
         oovv = _cp(eris.oovv)
-        oooo = _cp(eris.oooo)
+        #oooo = _cp(eris.oooo)
         vvvv = _cp(eris.vvvv)
         ovvo = _cp(eris.ovvo)
 
@@ -893,7 +892,7 @@ class RCCSD(ccsd.CCSD):
             def pickeig(w, v, nr, envs):
                 x0 = linalg_helper._gen_x0(envs['v'], envs['xs'])
                 idx = np.argmax( np.abs(np.dot(np.array(guess).conj(),np.array(x0).T)), axis=1 )
-                return w[idx].real, v[:,idx].real, idx
+                return lib.linalg_helper._eigs_cmplx2real(w, v, idx)
             eee, evecs = eig(self.eeccsd_matvec, guess, precond, pick=pickeig,
                              tol=self.conv_tol, max_cycle=self.max_cycle,
                              max_space=self.max_space, nroots=nroots, verbose=self.verbose)
@@ -941,7 +940,6 @@ class RCCSD(ccsd.CCSD):
 class _ChemistsERIs:
     def __init__(self, cc, mo_coeff=None, method='incore',
                  ao2mofn=ao2mo.outcore.general_iofree):
-        cput0 = (time.clock(), time.time())
         if mo_coeff is None:
             self.mo_coeff = mo_coeff = ccsd._mo_without_core(cc, cc.mo_coeff)
         else:
@@ -963,6 +961,12 @@ class _ChemistsERIs:
         self.ovvv = eri1[:nocc,nocc:,nocc:,nocc:].copy()
         self.vvvv = eri1[nocc:,nocc:,nocc:,nocc:].copy()
 
+    def get_ovvv(self, *slices):
+        '''To access a subblock of ovvv tensor'''
+        if slices:
+            return self.ovvv[slices]
+        else:
+            return self.ovvv
 
 class _IMDS:
     def __init__(self, cc):
@@ -1148,7 +1152,7 @@ if __name__ == '__main__':
     print(le[1] - 0.51876597800180335)
     print(le[2] - 0.67828755013874864)
 
-    e = mycc.ipccsd_star(e,v,lv)
+    e = mycc.ipccsd_star_contract(e,v,lv)
     print(e[0] - 0.43793202073189047)
     print(e[1] - 0.52287073446559729)
     print(e[2] - 0.67994597948852287)
@@ -1165,7 +1169,7 @@ if __name__ == '__main__':
     print(le[1] - 0.24027634198123343)
     print(le[2] - 0.51006809015066612)
 
-    e = mycc.eaccsd_star(e,v,lv)
+    e = mycc.eaccsd_star_contract(e,v,lv)
     print(e[0] - 0.16656250953550664)
     print(e[1] - 0.23944144521387614)
     print(e[2] - 0.41399436888830721)

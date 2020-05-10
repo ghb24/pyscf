@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,11 +20,10 @@
 Lambda equation of GHF-CCSD(T) with spin-orbital integrals
 
 Ref:
-JCP, 98, 8718
-JCP, 147, 044104
+JCP 98, 8718 (1993); DOI:10.1063/1.464480
+JCP 147, 044104 (2017); DOI:10.1063/1.4994918
 '''
 
-import time
 import numpy
 from pyscf import lib
 from pyscf.lib import logger
@@ -45,7 +44,7 @@ def make_intermediates(mycc, t1, t2, eris):
     majk = numpy.asarray(eris.ooov).conj().transpose(2,3,0,1)
     bcjk = numpy.asarray(eris.oovv).conj().transpose(2,3,0,1)
 
-    mo_e = eris.fock.diagonal().real
+    mo_e = eris.mo_energy
     eia = mo_e[:nocc,None] - mo_e[nocc:]
     d3 = lib.direct_sum('ia+jb+kc->ijkabc', eia, eia, eia)
 

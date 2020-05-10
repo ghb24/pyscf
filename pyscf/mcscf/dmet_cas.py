@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -76,7 +76,6 @@ def kernel(mf, dm, aolabels_or_baslst, threshold=THRESHOLD,
     >>> mc = mcscf.CASSCF(mf, ncas, nelecas).run(mo)
     '''
     from pyscf import lo
-    from pyscf.tools import mo_mapping
 
     if isinstance(verbose, logger.Logger):
         log = verbose
@@ -90,7 +89,7 @@ def kernel(mf, dm, aolabels_or_baslst, threshold=THRESHOLD,
     if s is None:
         s = mf.get_ovlp()
 
-    if (not isinstance(mf, scf.hf.SCF)) and hasattr(mf, '_scf'):
+    if (not isinstance(mf, scf.hf.SCF)) and getattr(mf, '_scf', None):
         mf = mf._scf
 
     baslst = gto.mole._aolabels2baslst(mol, aolabels_or_baslst, base)
@@ -233,8 +232,6 @@ def symmetrize(mol, e, c, s, log):
 del(THRESHOLD, OCC_CUTOFF, BASE, ORTH_METHOD, CANONICALIZE, FREEZE_IMP)
 
 if __name__ == '__main__':
-    from pyscf import scf
-    from pyscf import gto
     from pyscf import mcscf
 
     mol = gto.M(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,13 +14,11 @@
 # limitations under the License.
 #
 # Author: Qiming Sun <osirpt.sun@gmail.com>
-#         Jun Yang <junyang4711@gmail.com>
+#         Jun Yang
 #
 
-import time
 import numpy
 from pyscf import lib
-from pyscf.lib import logger
 from pyscf import ao2mo
 
 #einsum = numpy.einsum
@@ -344,7 +342,7 @@ def _gamma2_intermediates(cc, t1, t2, l1, l2, compress_vvvv=False):
     d2 = _gamma2_outcore(cc, t1, t2, l1, l2, h5fobj, compress_vvvv)
     return d2
 
-def make_rdm1(mycc, t1, t2, l1, l2):
+def make_rdm1(mycc, t1, t2, l1, l2, ao_repr=False):
     r'''
     One-particle spin density matrices dm1a, dm1b in MO basis (the
     occupied-virtual blocks due to the orbital response contribution are not
@@ -356,10 +354,10 @@ def make_rdm1(mycc, t1, t2, l1, l2):
     The convention of 1-pdm is based on McWeeney's book, Eq (5.4.20).
     '''
     d1 = _gamma1_intermediates(mycc, t1, t2, l1, l2)
-    return _make_rdm1(mycc, d1, with_frozen=True)
+    return _make_rdm1(mycc, d1, with_frozen=True, ao_repr=ao_repr)
 
 # spin-orbital rdm2 in Chemist's notation
-def make_rdm2(mycc, t1, t2, l1, l2):
+def make_rdm2(mycc, t1, t2, l1, l2, ao_repr=False):
     r'''
     Two-particle spin density matrices dm2aa, dm2ab, dm2bb in MO basis
 
@@ -383,9 +381,10 @@ def make_rdm2(mycc, t1, t2, l1, l2):
     '''
     d1 = _gamma1_intermediates(mycc, t1, t2, l1, l2)
     d2 = _gamma2_intermediates(mycc, t1, t2, l1, l2)
-    return _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True)
+    return _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True,
+                      ao_repr=ao_repr)
 
-def _make_rdm1(mycc, d1, with_frozen=True):
+def _make_rdm1(mycc, d1, with_frozen=True, ao_repr=False):
     doo, dOO = d1[0]
     dov, dOV = d1[1]
     dvo, dVO = d1[2]
@@ -411,7 +410,7 @@ def _make_rdm1(mycc, d1, with_frozen=True):
     dm1b *= .5
     dm1b[numpy.diag_indices(noccb)] += 1
 
-    if with_frozen and not (mycc.frozen is 0 or mycc.frozen is None):
+    if with_frozen and mycc.frozen is not None:
         nmoa = mycc.mo_occ[0].size
         nmob = mycc.mo_occ[1].size
         nocca = numpy.count_nonzero(mycc.mo_occ[0] > 0)
@@ -427,9 +426,14 @@ def _make_rdm1(mycc, d1, with_frozen=True):
         rdm1b[moidxb[:,None],moidxb] = dm1b
         dm1a = rdm1a
         dm1b = rdm1b
+
+    if ao_repr:
+        mo_a, mo_b = mycc.mo_coeff
+        dm1a = lib.einsum('pi,ij,qj->pq', mo_a, dm1a, mo_a)
+        dm1b = lib.einsum('pi,ij,qj->pq', mo_b, dm1b, mo_b)
     return dm1a, dm1b
 
-def _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True):
+def _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True, ao_repr=False):
     dovov, dovOV, dOVov, dOVOV = d2[0]
     dvvvv, dvvVV, dVVvv, dVVVV = d2[1]
     doooo, dooOO, dOOoo, dOOOO = d2[2]
@@ -548,7 +552,7 @@ def _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True):
     dm2ab[nocca:,:nocca,:noccb,:noccb] = dOOov.transpose(3,2,1,0).conj()
     dooOV = None
 
-    if with_frozen and not (mycc.frozen is 0 or mycc.frozen is None):
+    if with_frozen and mycc.frozen is not None:
         nmoa0 = dm2aa.shape[0]
         nmob0 = dm2bb.shape[0]
         nmoa = mycc.mo_occ[0].size
@@ -581,13 +585,13 @@ def _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True):
             dm2aa[i,i,:,:] += dm1a
             dm2aa[:,:,i,i] += dm1a
             dm2aa[:,i,i,:] -= dm1a
-            dm2aa[i,:,:,i] -= dm1a.conj()
+            dm2aa[i,:,:,i] -= dm1a.T
             dm2ab[i,i,:,:] += dm1b
         for i in range(noccb):
             dm2bb[i,i,:,:] += dm1b
             dm2bb[:,:,i,i] += dm1b
             dm2bb[:,i,i,:] -= dm1b
-            dm2bb[i,:,:,i] -= dm1b.conj()
+            dm2bb[i,:,:,i] -= dm1b.T
             dm2ab[:,:,i,i] += dm1a
 
         for i in range(nocca):
@@ -605,14 +609,24 @@ def _make_rdm2(mycc, d1, d2, with_dm1=True, with_frozen=True):
     dm2aa = dm2aa.transpose(1,0,3,2)
     dm2ab = dm2ab.transpose(1,0,3,2)
     dm2bb = dm2bb.transpose(1,0,3,2)
+
+    if ao_repr:
+        from pyscf.cc import ccsd_rdm
+        dm2aa = ccsd_rdm._rdm2_mo2ao(dm2aa, mycc.mo_coeff[0])
+        dm2bb = ccsd_rdm._rdm2_mo2ao(dm2bb, mycc.mo_coeff[1])
+        dm2ab = _dm2ab_mo2ao(dm2ab, mycc.mo_coeff[0], mycc.mo_coeff[1])
     return dm2aa, dm2ab, dm2bb
+
+
+def _dm2ab_mo2ao(dm2, mo_a, mo_b):
+    return lib.einsum('ijkl,pi,qj,rk,sl->pqrs', dm2, mo_a, mo_a.conj(),
+                      mo_b, mo_b.conj())
 
 
 if __name__ == '__main__':
     from functools import reduce
     from pyscf import gto
     from pyscf import scf
-    from pyscf import ao2mo
     from pyscf.cc import uccsd
 
     mol = gto.Mole()

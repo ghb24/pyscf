@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,9 +19,8 @@
 import warnings
 import ctypes
 import numpy
-import scipy.linalg
 from pyscf import lib
-from pyscf.lib import logger
+from pyscf.dft.sap import sap_effective_charge
 try:
     from pyscf.dft import libxc
 except (ImportError, OSError):
@@ -29,7 +28,6 @@ except (ImportError, OSError):
         from pyscf.dft import xcfun
         libxc = xcfun
     except (ImportError, OSError):
-        import warnings
         warnings.warn('XC functional libraries (libxc or XCfun) are not available.')
         from pyscf.dft import xc
         libxc = xc
@@ -165,13 +163,16 @@ def eval_rho(mol, ao, dm, non0tab=None, xctype='LDA', hermi=0, verbose=None):
     ao_loc = mol.ao_loc_nr()
     if xctype == 'LDA' or xctype == 'HF':
         c0 = _dot_ao_dm(mol, ao, dm, non0tab, shls_slice, ao_loc)
-        rho = numpy.einsum('pi,pi->p', ao, c0)
+        #:rho = numpy.einsum('pi,pi->p', ao, c0)
+        rho = _contract_rho(ao, c0)
     elif xctype in ('GGA', 'NLC'):
         rho = numpy.empty((4,ngrids))
         c0 = _dot_ao_dm(mol, ao[0], dm, non0tab, shls_slice, ao_loc)
-        rho[0] = numpy.einsum('pi,pi->p', c0, ao[0])
+        #:rho[0] = numpy.einsum('pi,pi->p', c0, ao[0])
+        rho[0] = _contract_rho(c0, ao[0])
         for i in range(1, 4):
-            rho[i] = numpy.einsum('pi,pi->p', c0, ao[i])
+            #:rho[i] = numpy.einsum('pi,pi->p', c0, ao[i])
+            rho[i] = _contract_rho(c0, ao[i])
             rho[i] *= 2 # *2 for +c.c. in the next two lines
             #c1 = _dot_ao_dm(mol, ao[i], dm, non0tab, shls_slice, ao_loc)
             #rho[i] += numpy.einsum('pi,pi->p', c1, ao[0])
@@ -179,15 +180,19 @@ def eval_rho(mol, ao, dm, non0tab=None, xctype='LDA', hermi=0, verbose=None):
         # rho[4] = \nabla^2 rho, rho[5] = 1/2 |nabla f|^2
         rho = numpy.empty((6,ngrids))
         c0 = _dot_ao_dm(mol, ao[0], dm, non0tab, shls_slice, ao_loc)
-        rho[0] = numpy.einsum('pi,pi->p', ao[0], c0)
+        #:rho[0] = numpy.einsum('pi,pi->p', ao[0], c0)
+        rho[0] = _contract_rho(ao[0], c0)
         rho[5] = 0
         for i in range(1, 4):
-            rho[i] = numpy.einsum('pi,pi->p', c0, ao[i]) * 2 # *2 for +c.c.
+            #:rho[i] = numpy.einsum('pi,pi->p', c0, ao[i]) * 2 # *2 for +c.c.
+            rho[i] = _contract_rho(c0, ao[i]) * 2
             c1 = _dot_ao_dm(mol, ao[i], dm.T, non0tab, shls_slice, ao_loc)
-            rho[5] += numpy.einsum('pi,pi->p', c1, ao[i])
+            #:rho[5] += numpy.einsum('pi,pi->p', c1, ao[i])
+            rho[5] += _contract_rho(c1, ao[i])
         XX, YY, ZZ = 4, 7, 9
         ao2 = ao[XX] + ao[YY] + ao[ZZ]
-        rho[4] = numpy.einsum('pi,pi->p', c0, ao2)
+        #:rho[4] = numpy.einsum('pi,pi->p', c0, ao2)
+        rho[4] = _contract_rho(c0, ao2)
         rho[4] += rho[5]
         rho[4] *= 2
         rho[5] *= .5
@@ -243,28 +248,35 @@ def eval_rho2(mol, ao, mo_coeff, mo_occ, non0tab=None, xctype='LDA',
         cpos = numpy.einsum('ij,j->ij', mo_coeff[:,pos], numpy.sqrt(mo_occ[pos]))
         if xctype == 'LDA' or xctype == 'HF':
             c0 = _dot_ao_dm(mol, ao, cpos, non0tab, shls_slice, ao_loc)
-            rho = numpy.einsum('pi,pi->p', c0, c0)
+            #:rho = numpy.einsum('pi,pi->p', c0, c0)
+            rho = _contract_rho(c0, c0)
         elif xctype in ('GGA', 'NLC'):
             rho = numpy.empty((4,ngrids))
             c0 = _dot_ao_dm(mol, ao[0], cpos, non0tab, shls_slice, ao_loc)
-            rho[0] = numpy.einsum('pi,pi->p', c0, c0)
+            #:rho[0] = numpy.einsum('pi,pi->p', c0, c0)
+            rho[0] = _contract_rho(c0, c0)
             for i in range(1, 4):
                 c1 = _dot_ao_dm(mol, ao[i], cpos, non0tab, shls_slice, ao_loc)
-                rho[i] = numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                #:rho[i] = numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                rho[i] = _contract_rho(c0, c1) * 2
         else: # meta-GGA
             # rho[4] = \nabla^2 rho, rho[5] = 1/2 |nabla f|^2
             rho = numpy.empty((6,ngrids))
             c0 = _dot_ao_dm(mol, ao[0], cpos, non0tab, shls_slice, ao_loc)
-            rho[0] = numpy.einsum('pi,pi->p', c0, c0)
+            #:rho[0] = numpy.einsum('pi,pi->p', c0, c0)
+            rho[0] = _contract_rho(c0, c0)
             rho[5] = 0
             for i in range(1, 4):
                 c1 = _dot_ao_dm(mol, ao[i], cpos, non0tab, shls_slice, ao_loc)
-                rho[i] = numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
-                rho[5] += numpy.einsum('pi,pi->p', c1, c1)
+                #:rho[i] = numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                #:rho[5] += numpy.einsum('pi,pi->p', c1, c1)
+                rho[i] = _contract_rho(c0, c1) * 2
+                rho[5] += _contract_rho(c1, c1)
             XX, YY, ZZ = 4, 7, 9
             ao2 = ao[XX] + ao[YY] + ao[ZZ]
             c1 = _dot_ao_dm(mol, ao2, cpos, non0tab, shls_slice, ao_loc)
-            rho[4] = numpy.einsum('pi,pi->p', c0, c1)
+            #:rho[4] = numpy.einsum('pi,pi->p', c0, c1)
+            rho[4] = _contract_rho(c0, c1)
             rho[4] += rho[5]
             rho[4] *= 2
 
@@ -282,25 +294,32 @@ def eval_rho2(mol, ao, mo_coeff, mo_occ, non0tab=None, xctype='LDA',
         cneg = numpy.einsum('ij,j->ij', mo_coeff[:,neg], numpy.sqrt(-mo_occ[neg]))
         if xctype == 'LDA' or xctype == 'HF':
             c0 = _dot_ao_dm(mol, ao, cneg, non0tab, shls_slice, ao_loc)
-            rho -= numpy.einsum('pi,pi->p', c0, c0)
+            #:rho -= numpy.einsum('pi,pi->p', c0, c0)
+            rho -= _contract_rho(c0, c0)
         elif xctype == 'GGA':
             c0 = _dot_ao_dm(mol, ao[0], cneg, non0tab, shls_slice, ao_loc)
-            rho[0] -= numpy.einsum('pi,pi->p', c0, c0)
+            #:rho[0] -= numpy.einsum('pi,pi->p', c0, c0)
+            rho[0] -= _contract_rho(c0, c0)
             for i in range(1, 4):
                 c1 = _dot_ao_dm(mol, ao[i], cneg, non0tab, shls_slice, ao_loc)
-                rho[i] -= numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                #:rho[i] -= numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                rho[i] -= _contract_rho(c0, c1) * 2 # *2 for +c.c.
         else:
             c0 = _dot_ao_dm(mol, ao[0], cneg, non0tab, shls_slice, ao_loc)
-            rho[0] -= numpy.einsum('pi,pi->p', c0, c0)
+            #:rho[0] -= numpy.einsum('pi,pi->p', c0, c0)
+            rho[0] -= _contract_rho(c0, c0)
             rho5 = 0
             for i in range(1, 4):
                 c1 = _dot_ao_dm(mol, ao[i], cneg, non0tab, shls_slice, ao_loc)
-                rho[i] -= numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
-                rho5 += numpy.einsum('pi,pi->p', c1, c1)
+                #:rho[i] -= numpy.einsum('pi,pi->p', c0, c1) * 2 # *2 for +c.c.
+                #:rho5 += numpy.einsum('pi,pi->p', c1, c1)
+                rho[i] -= _contract_rho(c0, c1) * 2 # *2 for +c.c.
+                rho5 += _contract_rho(c1, c1)
             XX, YY, ZZ = 4, 7, 9
             ao2 = ao[XX] + ao[YY] + ao[ZZ]
             c1 = _dot_ao_dm(mol, ao2, cneg, non0tab, shls_slice, ao_loc)
-            rho[4] -= numpy.einsum('pi,pi->p', c0, c1) * 2
+            #:rho[4] -= numpy.einsum('pi,pi->p', c0, c1) * 2
+            rho[4] -= _contract_rho(c0, c1) * 2
             rho[4] -= rho5 * 2
 
             rho[5] -= rho5 * .5
@@ -321,10 +340,6 @@ def _vv10nlc(rho,coords,vvrho,vvweight,vvcoords,nlc_pars):
     Gy=rho[2,:][threshind]
     Gz=rho[3,:][threshind]
     G=Gx**2.+Gy**2.+Gz**2.
-
-    #threshed output
-    excthresh=numpy.zeros(R.size)
-    vxcthresh=numpy.zeros([2,R.size])
 
     #inner grid needs threshing
     innerthreshind=vvrho[0,:]>=thresh
@@ -359,28 +374,41 @@ def _vv10nlc(rho,coords,vvrho,vvweight,vvcoords,nlc_pars):
     K=Kvv*(R**(1./6.))
     dKdR=(1./6.)*K
 
-    for i in range(R.size):
-        DX=vvcoords[:,0]-coords[i,0]
-        DY=vvcoords[:,1]-coords[i,1]
-        DZ=vvcoords[:,2]-coords[i,2]
-        R2=DX*DX+DY*DY+DZ*DZ
-        gp=R2*W0p+Kp
-        g=R2*W0[i]+K[i]
-        gt=g+gp
-        T=RpW/(g*gp*gt)
-        F=numpy.sum(T)
-        T*=(1./g+1./gt)
-        U=numpy.sum(T)
-        W=numpy.sum(T*R2)
-        F*=-1.5
-        #excthresh is multiplied by Rho later
-        excthresh[i]=Beta+0.5*F
-        vxcthresh[0,i]=Beta+F+1.5*(U*dKdR[i]+W*dW0dR[i])
-        vxcthresh[1,i]=1.5*W*dW0dG[i]
-    exc[threshind]=excthresh
-    vxc[0,threshind]=vxcthresh[0,:]
-    vxc[1,threshind]=vxcthresh[1,:]
-
+    vvcoords = numpy.asarray(vvcoords, order='C')
+    coords = numpy.asarray(coords, order='C')
+    F = numpy.empty_like(R)
+    U = numpy.empty_like(R)
+    W = numpy.empty_like(R)
+    #for i in range(R.size):
+    #    DX=vvcoords[:,0]-coords[i,0]
+    #    DY=vvcoords[:,1]-coords[i,1]
+    #    DZ=vvcoords[:,2]-coords[i,2]
+    #    R2=DX*DX+DY*DY+DZ*DZ
+    #    gp=R2*W0p+Kp
+    #    g=R2*W0[i]+K[i]
+    #    gt=g+gp
+    #    T=RpW/(g*gp*gt)
+    #    F=numpy.sum(T)
+    #    T*=(1./g+1./gt)
+    #    U=numpy.sum(T)
+    #    W=numpy.sum(T*R2)
+    #    F*=-1.5
+    libdft.VXC_vv10nlc(F.ctypes.data_as(ctypes.c_void_p),
+                       U.ctypes.data_as(ctypes.c_void_p),
+                       W.ctypes.data_as(ctypes.c_void_p),
+                       vvcoords.ctypes.data_as(ctypes.c_void_p),
+                       coords.ctypes.data_as(ctypes.c_void_p),
+                       W0p.ctypes.data_as(ctypes.c_void_p),
+                       W0.ctypes.data_as(ctypes.c_void_p),
+                       K.ctypes.data_as(ctypes.c_void_p),
+                       Kp.ctypes.data_as(ctypes.c_void_p),
+                       RpW.ctypes.data_as(ctypes.c_void_p),
+                       ctypes.c_int(vvcoords.shape[0]),
+                       ctypes.c_int(coords.shape[0]))
+    #exc is multiplied by Rho later
+    exc[threshind] = Beta+0.5*F
+    vxc[0,threshind] = Beta+F+1.5*(U*dKdR+W*dW0dR)
+    vxc[1,threshind] = 1.5*W*dW0dG
     return exc,vxc
 
 def eval_mat(mol, ao, weight, rho, vxc,
@@ -446,8 +474,8 @@ def eval_mat(mol, ao, weight, rho, vxc,
         else:
             vrho = vxc
         # *.5 because return mat + mat.T
-        aow = numpy.empty_like(ao)
-        aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho, out=aow)
+        #:aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho)
+        aow = _scale_ao(ao, .5*weight*vrho)
         mat = _dot_ao_ao(mol, ao, aow, non0tab, shls_slice, ao_loc)
     else:
         #wv = weight * vsigma * 2
@@ -476,12 +504,12 @@ def eval_mat(mol, ao, weight, rho, vxc,
                 vsigma = vsigma.T
                 wv[1:4] = rho_a[1:4] * (weight * vsigma[0] * 2)  # sigma_uu
                 wv[1:4]+= rho_b[1:4] * (weight * vsigma[1])      # sigma_ud
-        aow = numpy.empty_like(ao[0])
-        aow = numpy.einsum('npi,np->pi', ao[:4], wv, out=aow)
+        #:aow = numpy.einsum('npi,np->pi', ao[:4], wv)
+        aow = _scale_ao(ao[:4], wv)
         mat = _dot_ao_ao(mol, ao[0], aow, non0tab, shls_slice, ao_loc)
 
-# JCP, 138, 244108
-# JCP, 112, 7002
+# JCP 138, 244108 (2013); DOI:10.1063/1.4811270
+# JCP 112, 7002 (2000); DOI:10.1063/1.481298
     if xctype == 'MGGA':
         vlapl, vtau = vxc[2:]
 
@@ -494,7 +522,8 @@ def eval_mat(mol, ao, weight, rho, vxc,
                 vlapl = vlapl[0]
             XX, YY, ZZ = 4, 7, 9
             ao2 = ao[XX] + ao[YY] + ao[ZZ]
-            aow = numpy.einsum('pi,p->pi', ao2, .5 * weight * vlapl, out=aow)
+            #:aow = numpy.einsum('pi,p->pi', ao2, .5 * weight * vlapl, out=aow)
+            aow = _scale_ao(ao2, .5 * weight * vlapl, out=aow)
             mat += _dot_ao_ao(mol, ao[0], aow, non0tab, shls_slice, ao_loc)
 
         if spin != 0:
@@ -502,11 +531,14 @@ def eval_mat(mol, ao, weight, rho, vxc,
                 vtau = vtau.T
             vtau = vtau[0]
         wv = weight * (.25*vtau + vlapl)
-        aow = numpy.einsum('pi,p->pi', ao[1], wv, out=aow)
+        #:aow = numpy.einsum('pi,p->pi', ao[1], wv, out=aow)
+        aow = _scale_ao(ao[1], wv, out=aow)
         mat += _dot_ao_ao(mol, ao[1], aow, non0tab, shls_slice, ao_loc)
-        aow = numpy.einsum('pi,p->pi', ao[2], wv, out=aow)
+        #:aow = numpy.einsum('pi,p->pi', ao[2], wv, out=aow)
+        aow = _scale_ao(ao[2], wv, out=aow)
         mat += _dot_ao_ao(mol, ao[2], aow, non0tab, shls_slice, ao_loc)
-        aow = numpy.einsum('pi,p->pi', ao[3], wv, out=aow)
+        #:aow = numpy.einsum('pi,p->pi', ao[3], wv, out=aow)
+        aow = _scale_ao(ao[3], wv, out=aow)
         mat += _dot_ao_ao(mol, ao[3], aow, non0tab, shls_slice, ao_loc)
 
     return mat + mat.T.conj()
@@ -549,7 +581,7 @@ def _dot_ao_dm(mol, ao, dm, non0tab, shls_slice, ao_loc, out=None):
     '''return numpy.dot(ao, dm)'''
     ngrids, nao = ao.shape
     if nao < SWITCH_SIZE:
-        return lib.dot(ao, dm)
+        return lib.dot(dm.T, ao.T).T
 
     if not ao.flags.f_contiguous:
         ao = lib.transpose(ao)
@@ -576,6 +608,63 @@ def _dot_ao_dm(mol, ao, dm, non0tab, shls_slice, ao_loc, out=None):
        ctypes.c_int(ngrids), ctypes.c_int(mol.nbas),
        pnon0tab, pshls_slice, pao_loc)
     return vm
+
+def _scale_ao(ao, wv, out=None):
+    #:aow = numpy.einsum('npi,np->pi', ao[:4], wv)
+    if wv.ndim == 2:
+        ao = ao.transpose(0,2,1)
+    else:
+        ngrids, nao = ao.shape
+        ao = ao.T.reshape(1,nao,ngrids)
+        wv = wv.reshape(1,ngrids)
+
+    wv = numpy.asarray(wv, order='C')
+    comp, nao, ngrids = ao.shape
+    aow = numpy.ndarray((nao,ngrids), dtype=ao.dtype, buffer=out).T
+
+    if not ao.flags.c_contiguous:
+        aow = numpy.einsum('nip,np->pi', ao, wv)
+    elif aow.dtype == numpy.double:
+        libdft.VXC_dscale_ao(aow.ctypes.data_as(ctypes.c_void_p),
+                             ao.ctypes.data_as(ctypes.c_void_p),
+                             wv.ctypes.data_as(ctypes.c_void_p),
+                             ctypes.c_int(comp), ctypes.c_int(nao),
+                             ctypes.c_int(ngrids))
+    elif aow.dtype == numpy.complex128:
+        libdft.VXC_zscale_ao(aow.ctypes.data_as(ctypes.c_void_p),
+                             ao.ctypes.data_as(ctypes.c_void_p),
+                             wv.ctypes.data_as(ctypes.c_void_p),
+                             ctypes.c_int(comp), ctypes.c_int(nao),
+                             ctypes.c_int(ngrids))
+    else:
+        aow = numpy.einsum('nip,np->pi', ao, wv)
+    return aow
+
+def _contract_rho(bra, ket):
+    #:rho  = numpy.einsum('pi,pi->p', bra.real, ket.real)
+    #:rho += numpy.einsum('pi,pi->p', bra.imag, ket.imag)
+    bra = bra.T
+    ket = ket.T
+    nao, ngrids = bra.shape
+    rho = numpy.empty(ngrids)
+
+    if not (bra.flags.c_contiguous and ket.flags.c_contiguous):
+        rho  = numpy.einsum('ip,ip->p', bra.real, ket.real)
+        rho += numpy.einsum('ip,ip->p', bra.imag, ket.imag)
+    elif bra.dtype == numpy.double and ket.dtype == numpy.double:
+        libdft.VXC_dcontract_rho(rho.ctypes.data_as(ctypes.c_void_p),
+                                 bra.ctypes.data_as(ctypes.c_void_p),
+                                 ket.ctypes.data_as(ctypes.c_void_p),
+                                 ctypes.c_int(nao), ctypes.c_int(ngrids))
+    elif bra.dtype == numpy.complex128 and ket.dtype == numpy.complex128:
+        libdft.VXC_zcontract_rho(rho.ctypes.data_as(ctypes.c_void_p),
+                                 bra.ctypes.data_as(ctypes.c_void_p),
+                                 ket.ctypes.data_as(ctypes.c_void_p),
+                                 ctypes.c_int(nao), ctypes.c_int(ngrids))
+    else:
+        rho  = numpy.einsum('ip,ip->p', bra.real, ket.real)
+        rho += numpy.einsum('ip,ip->p', bra.imag, ket.imag)
+    return rho
 
 def nr_vxc(mol, grids, xc_code, dms, spin=0, relativity=0, hermi=0,
            max_memory=2000, verbose=None):
@@ -622,6 +711,68 @@ def nr_vxc(mol, grids, xc_code, dms, spin=0, relativity=0, hermi=0,
     return ni.nr_vxc(mol, grids, xc_code, dms, spin, relativity,
                      hermi, max_memory, verbose)
 
+def nr_sap_vxc(ni, mol, grids, max_memory=2000, verbose=None):
+    '''Calculate superposition of atomic potentials matrix on given meshgrids.
+
+    Args:
+        ni : an instance of :class:`NumInt`
+
+        mol : an instance of :class:`Mole`
+
+        grids : an instance of :class:`Grids`
+            grids.coords and grids.weights are needed for coordinates and weights of meshgrids.
+
+    Kwargs:
+        max_memory : int or float
+            The maximum size of cache to use (in MB).
+
+    Returns:
+        vmat is the XC potential matrix in 2D array of shape (nao,nao)
+        where nao is the number of AO functions.
+
+    Examples:
+    >>> import numpy
+    >>> from pyscf import gto, dft
+    >>> mol = gto.M(atom='H 0 0 0; H 0 0 1.1')
+    >>> grids = dft.gen_grid.Grids(mol)
+    >>> ni = dft.numint.NumInt()
+    >>> vsap = ni.nr_sap(mol, grids)
+    '''
+    shls_slice = (0, mol.nbas)
+    ao_loc = mol.ao_loc_nr()
+    nao = mol.nao
+    vmat = numpy.zeros((nao,nao))
+    aow = None
+    vxcw = None
+    ao_deriv = 0
+
+    atom_coords = mol.atom_coords()
+    atom_charges = mol.atom_charges()
+    eps = numpy.finfo(float).eps
+
+    for ao, mask, weight, coords in ni.block_loop(mol, grids, nao, ao_deriv, max_memory):
+        aow = numpy.ndarray(ao.shape, order='F', buffer=aow)
+        vxc = numpy.ndarray(coords.shape[0], buffer=vxcw)
+        vxc.fill(0.0)
+        # Form potential
+        for igrid in range(vxc.size):
+            for iatom in range(len(mol._atm)):
+                # Distance from nucleus
+                rnuc = numpy.linalg.norm(atom_coords[iatom,:] - coords[igrid,:])
+                if rnuc > eps:
+                    # Zeff(R)
+                    Zeff = sap_effective_charge(atom_charges[iatom], rnuc)
+                    vxc[igrid] -= Zeff/rnuc
+
+        # *.5 because vmat + vmat.T
+        #:aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho, out=aow)
+        aow = _scale_ao(ao, .5*weight*vxc, out=aow)
+        vmat += _dot_ao_ao(mol, ao, aow, mask, shls_slice, ao_loc)
+        vxc = None
+
+    vmat = vmat + vmat.conj().T
+    return vmat
+
 def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
            max_memory=2000, verbose=None):
     '''Calculate RKS XC functional and potential matrix on given meshgrids
@@ -637,7 +788,7 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
         xc_code : str
             XC functional description.
             See :func:`parse_xc` of pyscf/dft/libxc.py for more details.
-        dms : 2D array a list of 2D arrays
+        dms : 2D array or a list of 2D arrays
             Density matrix or multiple density matrices
 
     Kwargs:
@@ -672,7 +823,10 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
 
     nelec = numpy.zeros(nset)
     excsum = numpy.zeros(nset)
-    vmat = numpy.zeros((nset,nao,nao))
+    if isinstance(dms, numpy.ndarray):
+        vmat = numpy.zeros((nset,nao,nao), dtype=dms.dtype)
+    else:
+        vmat = numpy.zeros((nset,nao,nao), dtype=numpy.result_type(*dms))
     aow = None
     if xctype == 'LDA':
         ao_deriv = 0
@@ -681,13 +835,15 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
             aow = numpy.ndarray(ao.shape, order='F', buffer=aow)
             for idm in range(nset):
                 rho = make_rho(idm, ao, mask, 'LDA')
-                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1, verbose)[:2]
+                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1,
+                                      verbose=verbose)[:2]
                 vrho = vxc[0]
                 den = rho * weight
                 nelec[idm] += den.sum()
                 excsum[idm] += numpy.dot(den, exc)
                 # *.5 because vmat + vmat.T
-                aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho, out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho, out=aow)
+                aow = _scale_ao(ao, .5*weight*vrho, out=aow)
                 vmat[idm] += _dot_ao_ao(mol, ao, aow, mask, shls_slice, ao_loc)
                 rho = exc = vxc = vrho = None
     elif xctype == 'GGA':
@@ -698,13 +854,15 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
             aow = numpy.ndarray(ao[0].shape, order='F', buffer=aow)
             for idm in range(nset):
                 rho = make_rho(idm, ao, mask, 'GGA')
-                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1, verbose)[:2]
+                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1,
+                                      verbose=verbose)[:2]
                 den = rho[0] * weight
                 nelec[idm] += den.sum()
                 excsum[idm] += numpy.dot(den, exc)
 # ref eval_mat function
                 wv = _rks_gga_wv0(rho, vxc, weight)
-                aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
                 rho = exc = vxc = wv = None
     elif xctype == 'NLC':
@@ -745,7 +903,8 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 excsum[idm] += numpy.dot(den, exc)
 # ref eval_mat function
                 wv = _rks_gga_wv0(rho, vxc, weight)
-                aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
                 rho = exc = vxc = wv = None
         vvrho = vvweight = vvcoords = None
@@ -755,18 +914,19 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
         ao_deriv = 2
         for ao, mask, weight, coords \
                 in ni.block_loop(mol, grids, nao, ao_deriv, max_memory):
-            ngrid = weight.size
             aow = numpy.ndarray(ao[0].shape, order='F', buffer=aow)
             for idm in range(nset):
                 rho = make_rho(idm, ao, mask, 'MGGA')
-                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1, verbose)[:2]
+                exc, vxc = ni.eval_xc(xc_code, rho, 0, relativity, 1,
+                                      verbose=verbose)[:2]
                 vrho, vsigma, vlapl, vtau = vxc[:4]
                 den = rho[0] * weight
                 nelec[idm] += den.sum()
                 excsum[idm] += numpy.dot(den, exc)
 
                 wv = _rks_gga_wv0(rho, vxc, weight)
-                aow = numpy.einsum('npi,np->pi', ao[:4], wv, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao[:4], wv, out=aow)
+                aow = _scale_ao(ao[:4], wv, out=aow)
                 vmat[idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
 
 # FIXME: .5 * .5   First 0.5 for v+v.T symmetrization.
@@ -776,14 +936,14 @@ def nr_rks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 vmat[idm] += _dot_ao_ao(mol, ao[2], wv*ao[2], mask, shls_slice, ao_loc)
                 vmat[idm] += _dot_ao_ao(mol, ao[3], wv*ao[3], mask, shls_slice, ao_loc)
 
-                rho = exc = vxc = vrho = vsigma = wv = None
+                rho = exc = vxc = vrho = wv = None
 
     for i in range(nset):
-        vmat[i] = vmat[i] + vmat[i].T
+        vmat[i] = vmat[i] + vmat[i].conj().T
     if nset == 1:
         nelec = nelec[0]
         excsum = excsum[0]
-        vmat = vmat.reshape(nao,nao)
+        vmat = vmat[0]
     return nelec, excsum, vmat
 
 def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
@@ -843,7 +1003,7 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
 
     nelec = numpy.zeros((2,nset))
     excsum = numpy.zeros(nset)
-    vmat = numpy.zeros((2,nset,nao,nao))
+    vmat = numpy.zeros((2,nset,nao,nao), dtype=numpy.result_type(dma, dmb))
     aow = None
     if xctype == 'LDA':
         ao_deriv = 0
@@ -854,7 +1014,7 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 rho_a = make_rhoa(idm, ao, mask, xctype)
                 rho_b = make_rhob(idm, ao, mask, xctype)
                 exc, vxc = ni.eval_xc(xc_code, (rho_a, rho_b),
-                                      1, relativity, 1, verbose)[:2]
+                                      1, relativity, 1, verbose=verbose)[:2]
                 vrho = vxc[0]
                 den = rho_a * weight
                 nelec[0,idm] += den.sum()
@@ -864,9 +1024,11 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 excsum[idm] += numpy.dot(den, exc)
 
                 # *.5 due to +c.c. in the end
-                aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho[:,0], out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho[:,0], out=aow)
+                aow = _scale_ao(ao, .5*weight*vrho[:,0], out=aow)
                 vmat[0,idm] += _dot_ao_ao(mol, ao, aow, mask, shls_slice, ao_loc)
-                aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho[:,1], out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, .5*weight*vrho[:,1], out=aow)
+                aow = _scale_ao(ao, .5*weight*vrho[:,1], out=aow)
                 vmat[1,idm] += _dot_ao_ao(mol, ao, aow, mask, shls_slice, ao_loc)
                 rho_a = rho_b = exc = vxc = vrho = None
     elif xctype == 'GGA':
@@ -879,7 +1041,7 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 rho_a = make_rhoa(idm, ao, mask, xctype)
                 rho_b = make_rhob(idm, ao, mask, xctype)
                 exc, vxc = ni.eval_xc(xc_code, (rho_a, rho_b),
-                                      1, relativity, 1, verbose)[:2]
+                                      1, relativity, 1, verbose=verbose)[:2]
                 den = rho_a[0]*weight
                 nelec[0,idm] += den.sum()
                 excsum[idm] += numpy.dot(den, exc)
@@ -888,9 +1050,11 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 excsum[idm] += numpy.dot(den, exc)
 
                 wva, wvb = _uks_gga_wv0((rho_a,rho_b), vxc, weight)
-                aow = numpy.einsum('npi,np->pi', ao, wva, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wva, out=aow)
+                aow = _scale_ao(ao, wva, out=aow)
                 vmat[0,idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
-                aow = numpy.einsum('npi,np->pi', ao, wvb, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wvb, out=aow)
+                aow = _scale_ao(ao, wvb, out=aow)
                 vmat[1,idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
                 rho_a = rho_b = exc = vxc = wva = wvb = None
     elif xctype == 'MGGA':
@@ -899,13 +1063,12 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
         ao_deriv = 2
         for ao, mask, weight, coords \
                 in ni.block_loop(mol, grids, nao, ao_deriv, max_memory):
-            ngrid = weight.size
             aow = numpy.ndarray(ao[0].shape, order='F', buffer=aow)
             for idm in range(nset):
                 rho_a = make_rhoa(idm, ao, mask, xctype)
                 rho_b = make_rhob(idm, ao, mask, xctype)
                 exc, vxc = ni.eval_xc(xc_code, (rho_a, rho_b),
-                                      1, relativity, 1, verbose)[:2]
+                                      1, relativity, 1, verbose=verbose)[:2]
                 vrho, vsigma, vlapl, vtau = vxc[:4]
                 den = rho_a[0]*weight
                 nelec[0,idm] += den.sum()
@@ -915,9 +1078,11 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 excsum[idm] += numpy.dot(den, exc)
 
                 wva, wvb = _uks_gga_wv0((rho_a,rho_b), vxc, weight)
-                aow = numpy.einsum('npi,np->pi', ao[:4], wva, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao[:4], wva, out=aow)
+                aow = _scale_ao(ao[:4], wva, out=aow)
                 vmat[0,idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
-                aow = numpy.einsum('npi,np->pi', ao[:4], wvb, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao[:4], wvb, out=aow)
+                aow = _scale_ao(ao[:4], wvb, out=aow)
                 vmat[1,idm] += _dot_ao_ao(mol, ao[0], aow, mask, shls_slice, ao_loc)
 
 # FIXME: .5 * .5   First 0.5 for v+v.T symmetrization.
@@ -930,11 +1095,11 @@ def nr_uks(ni, mol, grids, xc_code, dms, relativity=0, hermi=0,
                 vmat[1,idm] += _dot_ao_ao(mol, ao[1], wv*ao[1], mask, shls_slice, ao_loc)
                 vmat[1,idm] += _dot_ao_ao(mol, ao[2], wv*ao[2], mask, shls_slice, ao_loc)
                 vmat[1,idm] += _dot_ao_ao(mol, ao[3], wv*ao[3], mask, shls_slice, ao_loc)
-                rho_a = rho_b = exc = vxc = vrho = vsigma = wva = wvb = None
+                rho_a = rho_b = exc = vxc = vrho = wva = wvb = None
 
     for i in range(nset):
-        vmat[0,i] = vmat[0,i] + vmat[0,i].T
-        vmat[1,i] = vmat[1,i] + vmat[1,i].T
+        vmat[0,i] = vmat[0,i] + vmat[0,i].conj().T
+        vmat[1,i] = vmat[1,i] + vmat[1,i].conj().T
     if isinstance(dma, numpy.ndarray) and dma.ndim == 2:
         vmat = vmat[:,0]
         nelec = nelec.reshape(2)
@@ -946,7 +1111,7 @@ def _format_uks_dm(dms):
         dma = dmb = dms * .5
     else:
         dma, dmb = dms
-    if hasattr(dms, 'mo_coeff'):
+    if getattr(dms, 'mo_coeff', None) is not None:
         mo_coeff = dms.mo_coeff
         mo_occ = dms.mo_occ
         if mo_coeff[0].ndim < dma.ndim: # handle ROKS
@@ -1011,7 +1176,10 @@ def nr_rks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
     shls_slice = (0, mol.nbas)
     ao_loc = mol.ao_loc_nr()
 
-    vmat = numpy.zeros((nset,nao,nao))
+    if isinstance(dms, numpy.ndarray):
+        vmat = numpy.zeros((nset,nao,nao), dtype=dms.dtype)
+    else:
+        vmat = numpy.zeros((nset,nao,nao), dtype=numpy.result_type(*dms))
     aow = None
     if xctype == 'LDA':
         ao_deriv = 0
@@ -1022,7 +1190,8 @@ def nr_rks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
             aow = numpy.ndarray(ao.shape, order='F', buffer=aow)
             if fxc is None:
                 rho = make_rho0(0, ao, mask, 'LDA')
-                fxc0 = ni.eval_xc(xc_code, rho, 0, relativity, 2, verbose)[2]
+                fxc0 = ni.eval_xc(xc_code, rho, 0, relativity, 2,
+                                  verbose=verbose)[2]
                 frr = fxc0[0]
             else:
                 frr = fxc[0][ip:ip+ngrid]
@@ -1030,7 +1199,8 @@ def nr_rks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
 
             for i in range(nset):
                 rho1 = make_rho(i, ao, mask, 'LDA')
-                aow = numpy.einsum('pi,p->pi', ao, weight*frr*rho1, out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, weight*frr*rho1, out=aow)
+                aow = _scale_ao(ao, weight*frr*rho1, out=aow)
                 vmat[i] += _dot_ao_ao(mol, aow, ao, mask, shls_slice, ao_loc)
                 rho1 = None
 
@@ -1046,7 +1216,8 @@ def nr_rks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
             else:
                 rho = numpy.asarray(rho0[:,ip:ip+ngrid], order='C')
             if vxc is None or fxc is None:
-                vxc0, fxc0 = ni.eval_xc(xc_code, rho, 0, relativity, 2, verbose)[1:3]
+                vxc0, fxc0 = ni.eval_xc(xc_code, rho, 0, relativity, 2,
+                                        verbose=verbose)[1:3]
             else:
                 vxc0 = (None, vxc[1][ip:ip+ngrid])
                 fxc0 = (fxc[0][ip:ip+ngrid], fxc[1][ip:ip+ngrid], fxc[2][ip:ip+ngrid])
@@ -1055,9 +1226,10 @@ def nr_rks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
             for i in range(nset):
                 rho1 = make_rho(i, ao, mask, 'GGA')
                 wv = _rks_gga_wv1(rho, rho1, vxc0, fxc0, weight)
-                aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[i] += _dot_ao_ao(mol, aow, ao[0], mask, shls_slice, ao_loc)
-                rho1 = sigma1 = None
+                rho1 = None
 
         for i in range(nset):  # for (\nabla\mu) \nu + \mu (\nabla\nu)
             vmat[i] = vmat[i] + vmat[i].T.conj()
@@ -1090,7 +1262,10 @@ def nr_rks_fxc_st(ni, mol, grids, xc_code, dm0, dms_alpha, relativity=0, singlet
     shls_slice = (0, mol.nbas)
     ao_loc = mol.ao_loc_nr()
 
-    vmat = numpy.zeros((nset,nao,nao))
+    if isinstance(dms_alpha, numpy.ndarray):
+        vmat = numpy.zeros((nset,nao,nao), dtype=dms_alpha.dtype)
+    else:
+        vmat = numpy.zeros((nset,nao,nao), dtype=numpy.result_type(*dms_alpha))
     aow = None
     if xctype == 'LDA':
         ao_deriv = 0
@@ -1112,16 +1287,13 @@ def nr_rks_fxc_st(ni, mol, grids, xc_code, dm0, dms_alpha, relativity=0, singlet
                 ip += ngrid
             if singlet:
                 frho = u_u + u_d
-                if 0:
-                    rho = ni.eval_rho2(mol, ao, mo_coeff, mo_occ, mask, 'LDA')
-                    fxc_test = ni.eval_xc(xc_code, rho, 0, deriv=2)[2]
-                    assert(numpy.linalg.norm(fxc_test[0]*2-frho) < 1e-4)
             else:
                 frho = u_u - u_d
 
             for i in range(nset):
                 rho1 = make_rho(i, ao, mask, 'LDA')
-                aow = numpy.einsum('pi,p->pi', ao, weight*frho*rho1, out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, weight*frho*rho1, out=aow)
+                aow = _scale_ao(ao, weight*frho*rho1, out=aow)
                 vmat[i] += _dot_ao_ao(mol, aow, ao, mask, shls_slice, ao_loc)
                 rho1 = None
 
@@ -1169,9 +1341,10 @@ def nr_rks_fxc_st(ni, mol, grids, xc_code, dm0, dms_alpha, relativity=0, singlet
                 # rho1[1:] = \nabla(|b><j|) z_{bj}
                 rho1 = make_rho(i, ao, mask, 'GGA')
                 wv = _rks_gga_wv1(rho, rho1, (None,fgamma), (frho,frhogamma,fgg), weight)
-                aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[i] += _dot_ao_ao(mol, aow, ao[0], mask, shls_slice, ao_loc)
-                rho1 = sigma1 = None
+                rho1 = None
 
         for i in range(nset):  # for (\nabla\mu) \nu + \mu (\nabla\nu)
             vmat[i] = vmat[i] + vmat[i].T.conj()
@@ -1286,7 +1459,7 @@ def nr_uks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
     shls_slice = (0, mol.nbas)
     ao_loc = mol.ao_loc_nr()
 
-    vmat = numpy.zeros((2,nset,nao,nao))
+    vmat = numpy.zeros((2,nset,nao,nao), dtype=numpy.result_type(dma, dmb))
     aow = None
     if xctype == 'LDA':
         ao_deriv = 0
@@ -1298,7 +1471,8 @@ def nr_uks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
             if fxc is None:
                 rho0a = make_rho0(0, ao, mask, xctype)
                 rho0b = make_rho0(1, ao, mask, xctype)
-                fxc0 = ni.eval_xc(xc_code, (rho0a,rho0b), 1, relativity, 2, verbose)[2]
+                fxc0 = ni.eval_xc(xc_code, (rho0a,rho0b), 1, relativity, 2,
+                                  verbose=verbose)[2]
                 u_u, u_d, d_d = fxc0[0].T
             else:
                 u_u, u_d, d_d = fxc[0][ip:ip+ngrid].T
@@ -1309,11 +1483,13 @@ def nr_uks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
                 rho1b = make_rhob(i, ao, mask, xctype)
                 wv = u_u * rho1a + u_d * rho1b
                 wv *= weight
-                aow = numpy.einsum('pi,p->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[0,i] += _dot_ao_ao(mol, aow, ao, mask, shls_slice, ao_loc)
                 wv = u_d * rho1a + d_d * rho1b
                 wv *= weight
-                aow = numpy.einsum('pi,p->pi', ao, wv, out=aow)
+                #:aow = numpy.einsum('pi,p->pi', ao, wv, out=aow)
+                aow = _scale_ao(ao, wv, out=aow)
                 vmat[1,i] += _dot_ao_ao(mol, aow, ao, mask, shls_slice, ao_loc)
 
     elif xctype == 'GGA':
@@ -1330,7 +1506,8 @@ def nr_uks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
                 rho0a = rho0[0][:,ip:ip+ngrid]
                 rho0b = rho0[1][:,ip:ip+ngrid]
             if vxc is None or fxc is None:
-                vxc0, fxc0 = ni.eval_xc(xc_code, (rho0a,rho0b), 1, relativity, 2, verbose)[1:3]
+                vxc0, fxc0 = ni.eval_xc(xc_code, (rho0a,rho0b), 1, relativity, 2,
+                                        verbose=verbose)[1:3]
             else:
                 vxc0 = (None, vxc[1][ip:ip+ngrid])
                 fxc0 = (fxc[0][ip:ip+ngrid], fxc[1][ip:ip+ngrid], fxc[2][ip:ip+ngrid])
@@ -1340,9 +1517,11 @@ def nr_uks_fxc(ni, mol, grids, xc_code, dm0, dms, relativity=0, hermi=0,
                 rho1a = make_rhoa(i, ao, mask, xctype)
                 rho1b = make_rhob(i, ao, mask, xctype)
                 wva, wvb = _uks_gga_wv1((rho0a,rho0b), (rho1a,rho1b), vxc0, fxc0, weight)
-                aow = numpy.einsum('npi,np->pi', ao, wva, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wva, out=aow)
+                aow = _scale_ao(ao, wva, out=aow)
                 vmat[0,i] += _dot_ao_ao(mol, aow, ao[0], mask, shls_slice, ao_loc)
-                aow = numpy.einsum('npi,np->pi', ao, wvb, out=aow)
+                #:aow = numpy.einsum('npi,np->pi', ao, wvb, out=aow)
+                aow = _scale_ao(ao, wvb, out=aow)
                 vmat[1,i] += _dot_ao_ao(mol, aow, ao[0], mask, shls_slice, ao_loc)
 
         for i in range(nset):  # for (\nabla\mu) \nu + \mu (\nabla\nu)
@@ -1722,6 +1901,7 @@ def get_rho(ni, mol, dm, grids, max_memory=2000):
     '''Density in real space
     '''
     make_rho, nset, nao = ni._gen_rho_evaluator(mol, dm, 1)
+    assert(nset == 1)
     rho = numpy.empty(grids.weights.size)
     p1 = 0
     for ao, mask, weight, coords \
@@ -1732,8 +1912,10 @@ def get_rho(ni, mol, dm, grids, max_memory=2000):
 
 
 class NumInt(object):
+    libxc = libxc
+
     def __init__(self):
-        self.libxc = libxc
+        self.omega = None  # RSH paramter
 
     @lib.with_doc(nr_vxc.__doc__)
     def nr_vxc(self, mol, grids, xc_code, dms, spin=0, relativity=0, hermi=0,
@@ -1755,8 +1937,13 @@ class NumInt(object):
             return self.nr_uks_fxc(mol, grids, xc_code, dm0, dms, relativity,
                                    hermi, rho0, vxc, fxc, max_memory, verbose)
 
+        #@lib.with_doc(nr_sap.__doc__)
+    def nr_sap(self, mol, grids, max_memory=2000, verbose=None):
+        return self.nr_sap_vxc(mol, grids, max_memory, verbose)
+
     nr_rks = nr_rks
     nr_uks = nr_uks
+    nr_sap_vxc = nr_sap_vxc
     nr_rks_fxc = nr_rks_fxc
     nr_uks_fxc = nr_uks_fxc
     cache_xc_kernel  = cache_xc_kernel
@@ -1781,12 +1968,14 @@ class NumInt(object):
     def eval_rho(self, mol, ao, dm, non0tab=None, xctype='LDA', hermi=0, verbose=None):
         return eval_rho(mol, ao, dm, non0tab, xctype, hermi, verbose)
 
-    def block_loop(self, mol, grids, nao, deriv=0, max_memory=2000,
+    def block_loop(self, mol, grids, nao=None, deriv=0, max_memory=2000,
                    non0tab=None, blksize=None, buf=None):
         '''Define this macro to loop over grids by blocks.
         '''
         if grids.coords is None:
             grids.build(with_non0tab=True)
+        if nao is None:
+            nao = mol.nao
         ngrids = grids.coords.shape[0]
         comp = (deriv+1)*(deriv+2)*(deriv+3)//6
 # NOTE to index grids.non0tab, the blksize needs to be the integer multiplier of BLKSIZE
@@ -1809,7 +1998,7 @@ class NumInt(object):
             yield ao, non0, weight, coords
 
     def _gen_rho_evaluator(self, mol, dms, hermi=0):
-        if hasattr(dms, 'mo_coeff'):
+        if getattr(dms, 'mo_coeff', None) is not None:
 #TODO: test whether dm.mo_coeff matching dm
             mo_coeff = dms.mo_coeff
             mo_occ = dms.mo_occ
@@ -1845,8 +2034,11 @@ class NumInt(object):
     def rsh_coeff(self, xc_code):
         return self.libxc.rsh_coeff(xc_code)
 
-    def eval_xc(self, xc_code, rho, spin=0, relativity=0, deriv=1, verbose=None):
-        return self.libxc.eval_xc(xc_code, rho, spin, relativity, deriv, verbose)
+    def eval_xc(self, xc_code, rho, spin=0, relativity=0, deriv=1, omega=None,
+                verbose=None):
+        if omega is None: omega = self.omega
+        return self.libxc.eval_xc(xc_code, rho, spin, relativity, deriv,
+                                  omega, verbose)
     eval_xc.__doc__ = libxc.eval_xc.__doc__
 
     def _xc_type(self, xc_code):
@@ -1865,6 +2057,9 @@ class NumInt(object):
         beta = c_SR - c_LR
         '''
         omega, alpha, beta = self.rsh_coeff(xc_code)
+        if self.omega is not None:
+            omega = self.omega
+
         if abs(omega) > 1e-10:
             hyb = alpha + beta
         else:

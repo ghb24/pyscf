@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 Foster-Boys localization
 '''
 
-import sys
 import time
 import numpy
 from functools import reduce
@@ -53,7 +52,7 @@ def kernel(localizer, mo_coeff=None, callback=None, verbose=None):
         conv_tol_grad = localizer.conv_tol_grad
 
     if mo_coeff is None:
-        if hasattr(localizer, 'mol') and localizer.mol.natm == 0:
+        if getattr(localizer, 'mol', None) and localizer.mol.natm == 0:
             # For customized Hamiltonian
             u0 = localizer.get_init_guess('random')
         else:
@@ -116,15 +115,68 @@ def atomic_init_guess(mol, mo_coeff):
     s = mol.intor_symmetric('int1e_ovlp')
     c = orth.orth_ao(mol, s=s)
     mo = reduce(numpy.dot, (c.conj().T, s, mo_coeff))
-    nmo = mo_coeff.shape[1]
 # Find the AOs which have largest overlap to MOs
     idx = numpy.argsort(numpy.einsum('pi,pi->p', mo.conj(), mo))
     nmo = mo.shape[1]
-    idx = idx[-nmo:]
+    idx = sorted(idx[-nmo:])
+
+    # Rotate mo_coeff, make it as close as possible to AOs
     u, w, vh = numpy.linalg.svd(mo[idx])
-    return lib.dot(vh, u.conj().T)
+    return lib.dot(u, vh).conj().T
 
 class Boys(ciah.CIAHOptimizer):
+    r'''
+    The Foster-Boys localization optimizer that maximizes the orbital dipole
+
+    \sum_i | <i| r |i> |^2
+
+    Args:
+        mol : Mole object
+
+    Kwargs:
+        mo_coeff : size (N,N) np.array
+            The orbital space to localize for Boys localization.
+            When initializing the localization optimizer ``bopt = Boys(mo_coeff)``,
+
+            Note these orbitals ``mo_coeff`` may or may not be used as initial
+            guess, depending on the attribute ``.init_guess`` . If ``.init_guess``
+            is set to None, the ``mo_coeff`` will be used as initial guess. If
+            ``.init_guess`` is 'atomic', a few atomic orbitals will be
+            constructed inside the space of the input orbitals and the atomic
+            orbitals will be used as initial guess.
+
+            Note when calling .kernel(orb) method with a set of orbitals as
+            argument, the orbitals will be used as initial guess regardless of
+            the value of the attributes .mo_coeff and .init_guess.
+
+    Attributes for Boys class:
+        verbose : int
+            Print level.  Default value equals to :class:`Mole.verbose`.
+        max_memory : float or int
+            Allowed memory in MB.  Default value equals to :class:`Mole.max_memory`.
+        conv_tol : float
+            Converge threshold.  Default 1e-6
+        conv_tol_grad : float
+            Converge threshold for orbital rotation gradients.  Default 1e-3
+        max_cycle : int
+            The max. number of macro iterations. Default 100
+        max_iters : int
+            The max. number of iterations in each macro iteration. Default 20
+        max_stepsize : float
+            The step size for orbital rotation.  Small step (0.005 - 0.05) is prefered.
+            Default 0.03.
+        init_guess : str or None
+            Initial guess for optimization. If set to None, orbitals defined
+            by the attribute .mo_coeff will be used as initial guess. If set
+            to 'atomic', atomic orbitals will be used as initial guess. Default
+            is 'atomic'
+
+    Saved results
+
+        mo_coeff : ndarray
+            Localized orbitals
+
+    '''
 
     conv_tol = getattr(__config__, 'lo_boys_Boys_conv_tol', 1e-6)
     conv_tol_grad = getattr(__config__, 'lo_boys_Boys_conv_tol_grad', None)
@@ -148,10 +200,10 @@ class Boys(ciah.CIAHOptimizer):
                     'ah_max_cycle', 'init_guess'))
         self._keys = set(self.__dict__.keys()).union(keys)
 
-    def dump_flags(self):
-        log = logger.Logger(self.stdout, self.verbose)
+    def dump_flags(self, verbose=None):
+        log = logger.new_logger(self, verbose)
         log.info('\n')
-        log.info('******** %s flags ********', self.__class__)
+        log.info('******** %s ********', self.__class__)
         log.info('conv_tol = %s'       , self.conv_tol       )
         log.info('conv_tol_grad = %s'  , self.conv_tol_grad  )
         log.info('max_cycle = %s'      , self.max_cycle      )

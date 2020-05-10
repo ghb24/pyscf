@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,21 +26,24 @@ from pyscf.dft import uks
 from pyscf.dft import rks
 
 
-class SymAdaptedUKS(uhf_symm.UHF):
+class SymAdaptedUKS(uhf_symm.UHF, rks.KohnShamDFT):
     ''' Restricted Kohn-Sham '''
-    def __init__(self, mol):
+    def __init__(self, mol, xc='LDA,VWN'):
         uhf_symm.UHF.__init__(self, mol)
-        rks._dft_common_init_(self)
+        rks.KohnShamDFT.__init__(self, xc)
 
-    def dump_flags(self):
-        uhf_symm.UHF.dump_flags(self)
-        logger.info(self, 'XC functionals = %s', self.xc)
-        logger.info(self, 'small_rho_cutoff = %g', self.small_rho_cutoff)
-        self.grids.dump_flags()
+    def dump_flags(self, verbose=None):
+        uhf_symm.UHF.dump_flags(self, verbose)
+        rks.KohnShamDFT.dump_flags(self, verbose)
+        return self
 
     get_veff = uks.get_veff
+    get_vsap = uks.get_vsap
     energy_elec = uks.energy_elec
-    define_xc_ = rks.define_xc_
+
+    init_guess_by_vsap = rks.init_guess_by_vsap
+
+    reset = rks.KohnShamDFT.reset
 
     def nuc_grad_method(self):
         from pyscf.grad import uks

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
 
 import itertools
 from collections import OrderedDict
+from numbers import Number
 import numpy as np
-import scipy.linalg
 from pyscf import lib
 from pyscf import __config__
 
@@ -75,33 +75,14 @@ def get_kconserv(cell, kpts):
     a = cell.lattice_vectors() / (2*np.pi)
 
     kconserv = np.zeros((nkpts,nkpts,nkpts), dtype=int)
-    kvMLK = kpts[:,None,None,:] - kpts[:,None,:] + kpts
+    kvKLM = kpts[:,None,None,:] - kpts[:,None,:] + kpts
     for N, kvN in enumerate(kpts):
-        kvMLKN = np.einsum('klmx,wx->mlkw', kvMLK - kvN, a)
+        kvKLMN = np.einsum('wx,klmx->wklm', a, kvKLM - kvN)
         # check whether (1/(2pi) k_{KLMN} dot a) is an integer
-        kvMLKN_int = np.rint(kvMLKN)
-        mask = np.einsum('klmw->mlk', abs(kvMLKN - kvMLKN_int)) < 1e-9
+        kvKLMN_int = np.rint(kvKLMN)
+        mask = np.einsum('wklm->klm', abs(kvKLMN - kvKLMN_int)) < 1e-9
         kconserv[mask] = N
     return kconserv
-
-
-    if kconserv is None:
-        kconserv = get_kconserv(cell, kpts)
-
-    arr_offset = []
-    arr_size = []
-    offset = 0
-    for kk, kl, km in loop_kkk(nkpts):
-        kn = kconserv[kk, kl, km]
-
-        # Get array size for these k-points and add offset
-        size = np.prod([norb_per_kpt[x] for x in [kk, kl, km, kn]])
-
-        arr_size.append(size)
-        arr_offset.append(offset)
-
-        offset += size
-    return arr_offset, arr_size, (arr_size[-1] + arr_offset[-1])
 
 
 def check_kpt_antiperm_symmetry(array, idx1, idx2, tolerance=1e-8):
@@ -158,7 +139,7 @@ def check_kpt_antiperm_symmetry(array, idx1, idx2, tolerance=1e-8):
     orb_idx2 = (2 * nparticles - 1) + idx2
 
     # Sign of permutation
-    sign = (-1)**(abs(idx1 - idx2) + 1)
+    # sign = (-1)**(abs(idx1 - idx2) + 1)
     out_array_indices = np.arange(array_shape_len)
 
     out_array_indices[kpt_idx1], out_array_indices[kpt_idx2] = \
@@ -171,7 +152,7 @@ def check_kpt_antiperm_symmetry(array, idx1, idx2, tolerance=1e-8):
 
 
 def get_kconserv3(cell, kpts, kijkab):
-    '''Get the momentum conservation array for a set of k-points.
+    r'''Get the momentum conservation array for a set of k-points.
 
     This function is similar to get_kconserv, but instead finds the 'kc'
     that satisfies momentum conservation for 5 k-points,
@@ -180,7 +161,6 @@ def get_kconserv3(cell, kpts, kijkab):
 
     where these kpoints are stored in kijkab[ki, kj, kk, ka, kb].
     '''
-    nkpts = kpts.shape[0]
     a = cell.lattice_vectors() / (2*np.pi)
 
     kpts_i, kpts_j, kpts_k, kpts_a, kpts_b = \
@@ -202,6 +182,108 @@ def get_kconserv3(cell, kpts, kijkab):
                  if not isinstance(x, (int,np.int))]
     kconserv = kconserv.reshape(new_shape)
     return kconserv
+
+
+class VectorComposer(object):
+    def __init__(self, dtype):
+        """
+        Composes vectors.
+        Args:
+            dtype (type): array data type;
+        """
+        self.__dtype__ = dtype
+        self.__transactions__ = []
+        self.__total_size__ = 0
+        self.__data__ = None
+
+    def put(self, a):
+        """
+        Puts array into vector.
+        Args:
+            a (ndarray): array to put;
+        """
+        if a.dtype != self.__dtype__:
+            raise ValueError("dtype mismatch: passed %s vs expected %s" % (a.dtype, self.dtype))
+        self.__transactions__.append(a)
+        self.__total_size__ += a.size
+
+    def flush(self):
+        """
+        Composes the vector.
+        Returns:
+            The composed vector.
+        """
+        if self.__data__ is None:
+            self.__data__ = result = np.empty(self.__total_size__, dtype=self.__dtype__)
+            offset = 0
+        else:
+            offset = self.__data__.size
+            self.__data__ = result = np.empty(self.__total_size__ + self.__data__.size, dtype=self.__dtype__)
+
+        for i in self.__transactions__:
+            s = i.size
+            result[offset:offset + s] = i.reshape(-1)
+            offset += s
+        self.__transactions__ = []
+
+        return result
+
+
+class VectorSplitter(object):
+    def __init__(self, vector):
+        """
+        Splits vectors into pieces.
+        Args:
+            vector (ndarray): vector to split;
+        """
+        self.__data__ = vector
+        self.__offset__ = 0
+
+    def get(self, destination, slc=None):
+        """
+        Retrieves the next array.
+        Args:
+            destination: the shape of the destination array or the destination array itself;
+            slc: an optional slice;
+
+        Returns:
+            The array.
+        """
+        if isinstance(destination, Number):
+            destination = np.zeros((destination,), dtype=self.__data__.dtype)
+        elif isinstance(destination, tuple):
+            destination = np.zeros(destination, dtype=self.__data__.dtype)
+        elif isinstance(destination, np.ndarray):
+            pass
+        else:
+            raise ValueError("Unknown destination: %s" % str(destination))
+
+        if slc is None:
+            take_size = np.prod(destination.shape)
+            take_shape = destination.shape
+        else:
+            slc = np.ix_(*slc)
+            take_size = destination[slc].size
+            take_shape = destination[slc].shape
+
+        avail = self.__data__.size - self.__offset__
+        if take_size > avail:
+            raise ValueError("Insufficient # of elements: required %d %s, found %d" % (take_size, take_shape, avail))
+
+        if slc is None:
+            destination[:] = self.__data__[self.__offset__:self.__offset__ + take_size].reshape(take_shape)
+        else:
+            destination[slc] = self.__data__[self.__offset__:self.__offset__ + take_size].reshape(take_shape)
+
+        self.__offset__ += take_size
+        return destination
+
+    def truncate(self):
+        """
+        Truncates the data vector.
+        """
+        self.__data__ = self.__data__[self.__offset__:].copy()
+        self.__offset__ = 0
 
 
 class KptsHelper(lib.StreamObject):

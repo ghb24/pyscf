@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,14 +20,13 @@
 GHF-CCSD(T) with spin-orbital integrals
 '''
 
-import time
 import numpy
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf.cc import gccsd
 
 # spin-orbital formula
-# JCP, 98, 8718
+# JCP 98, 8718 (1993); DOI:10.1063/1.464480
 def kernel(cc, eris, t1=None, t2=None, verbose=logger.INFO):
     assert(isinstance(eris, gccsd._PhysicistsERIs))
     if t1 is None or t2 is None:
@@ -38,7 +37,7 @@ def kernel(cc, eris, t1=None, t2=None, verbose=logger.INFO):
     majk = numpy.asarray(eris.ooov).conj().transpose(2,3,0,1)
     bcjk = numpy.asarray(eris.oovv).conj().transpose(2,3,0,1)
     fvo = eris.fock[nocc:,:nocc]
-    mo_e = eris.fock.diagonal().real
+    mo_e = eris.mo_energy
     eijk = lib.direct_sum('i+j+k->ijk', mo_e[:nocc], mo_e[:nocc], mo_e[:nocc])
     eabc = lib.direct_sum('a+b+c->abc', mo_e[nocc:], mo_e[nocc:], mo_e[nocc:])
 

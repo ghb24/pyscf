@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,10 +36,11 @@ from pyscf.grad.mp2 import _shell_prange, _index_frozen_active
 
 #
 # Note: only works with canonical orbitals
-# Non-canonical formula refers to JCP, 95, 2639
+# Non-canonical formula refers to JCP 95, 2639 (1991); DOI:10.1063/1.460916
 #
-def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
-           mf_grad=None, d1=None, d2=None, verbose=logger.INFO):
+def grad_elec(cc_grad, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
+              d1=None, d2=None, verbose=logger.INFO):
+    mycc = cc_grad.base
     if eris is not None:
         if abs(eris.fock - numpy.diag(eris.fock.diagonal())).max() > 1e-3:
             raise RuntimeError('CCSD gradients does not support NHF (non-canonical HF)')
@@ -48,7 +49,6 @@ def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
     if t2 is None: t2 = mycc.t2
     if l1 is None: l1 = mycc.l1
     if l2 is None: l2 = mycc.l2
-    if mf_grad is None: mf_grad = mycc._scf.nuc_grad_method()
 
     log = logger.new_logger(mycc, verbose)
     time0 = time.clock(), time.time()
@@ -64,12 +64,14 @@ def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
         d2 = ccsd_rdm._gamma2_outcore(mycc, t1, t2, l1, l2, fdm2, True)
     time1 = log.timer_debug1('rdm2 intermediates', *time1)
 
-    mol = mycc.mol
+    mol = cc_grad.mol
     mo_coeff = mycc.mo_coeff
     mo_energy = mycc._scf.mo_energy
     nao, nmo = mo_coeff.shape
     nocc = numpy.count_nonzero(mycc.mo_occ > 0)
-    with_frozen = not (mycc.frozen is None or mycc.frozen is 0)
+    with_frozen = not ((mycc.frozen is None)
+                       or (isinstance(mycc.frozen, (int, numpy.integer)) and mycc.frozen == 0)
+                       or (len(mycc.frozen) == 0))
     OA, VA, OF, VF = _index_frozen_active(mycc.get_frozen_mask(), mycc.mo_occ)
 
     log.debug('symmetrized rdm2 and MO->AO transformation')
@@ -151,8 +153,12 @@ def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
     time1 = log.timer_debug1('response_rdm1', *time1)
 
     log.debug('h1 and JK1')
+    # Initialize hcore_deriv with the underlying SCF object because some
+    # extensions (e.g. QM/MM, solvent) modifies the SCF object only.
+    mf_grad = cc_grad.base._scf.nuc_grad_method()
     hcore_deriv = mf_grad.hcore_generator(mol)
     s1 = mf_grad.get_ovlp(mol)
+
     zeta = lib.direct_sum('i+j->ij', mo_energy, mo_energy) * .5
     zeta[nocc:,:nocc] = mo_energy[:nocc]
     zeta[:nocc,nocc:] = mo_energy[:nocc].reshape(-1,1)
@@ -166,7 +172,7 @@ def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
     # Hartree-Fock part contribution
     dm1p = hf_dm1 + dm1*2
     dm1 += hf_dm1
-    zeta += mf_grad.make_rdm1e(mo_energy, mo_coeff, mycc.mo_occ)
+    zeta += rhf_grad.make_rdm1e(mo_energy, mo_coeff, mycc.mo_occ)
 
     for k, ia in enumerate(atmlst):
         shl0, shl1, p0, p1 = offsetdic[ia]
@@ -183,7 +189,6 @@ def kernel(mycc, t1=None, t2=None, l1=None, l2=None, eris=None, atmlst=None,
         de[k] -= numpy.einsum('xij,ij->x', s1[:,p0:p1], vhf_s1occ[p0:p1]) * 2
         de[k] -= numpy.einsum('xij,ij->x', vhf1[k], dm1p)
 
-    de += mf_grad.grad_nuc(mol, atmlst)
     log.timer('%s gradients' % mycc.__class__.__name__, *time0)
     return de
 
@@ -219,43 +224,49 @@ def as_scanner(grad_cc):
     class CCSD_GradScanner(grad_cc.__class__, lib.GradScanner):
         def __init__(self, g):
             lib.GradScanner.__init__(self, g)
+
         def __call__(self, mol_or_geom, **kwargs):
             if isinstance(mol_or_geom, gto.Mole):
                 mol = mol_or_geom
             else:
                 mol = self.mol.set_geom_(mol_or_geom, inplace=False)
-            # The following simple version also works.  But eris object is
-            # recomputed in cc_scanner and solve_lambda.
-            # cc = self.base
-            # cc(mol)
-            # eris = cc.ao2mo()
-            # cc.solve_lambda(cc.t1, cc.t2, cc.l1, cc.l2, eris=eris)
-            # mf_grad = cc._scf.nuc_grad_method()
-            # de = self.kernel(cc.t1, cc.t2, cc.l1, cc.l2, eris=eris, mf_grad=mf_grad)
 
             cc = self.base
+            if cc.t2 is not None:
+                last_size = cc.vector_size()
+            else:
+                last_size = 0
+
+            cc.reset(mol)
             mf_scanner = cc._scf
             mf_scanner(mol)
-            cc.mol = mol
             cc.mo_coeff = mf_scanner.mo_coeff
             cc.mo_occ = mf_scanner.mo_occ
+            if last_size != cc.vector_size():
+                cc.t1 = cc.t2 = cc.l1 = cc.l2 = None
+
+            self.mol = mol
             eris = cc.ao2mo(cc.mo_coeff)
-            cc.kernel(cc.t1, cc.t2, eris=eris)
-            cc.solve_lambda(cc.t1, cc.t2, cc.l1, cc.l2, eris=eris)
-            mf_grad = mf_scanner.nuc_grad_method()
-            de = self.kernel(cc.t1, cc.t2, cc.l1, cc.l2, eris=eris,
-                             mf_grad=mf_grad, **kwargs)
+            # Update cc.t1 and cc.t2
+            cc.kernel(t1=cc.t1, t2=cc.t2, eris=eris)
+            # Update cc.l1 and cc.l2
+            cc.solve_lambda(l1=cc.l1, l2=cc.l2, eris=eris)
+
+            de = self.kernel(cc.t1, cc.t2, cc.l1, cc.l2, eris=eris, **kwargs)
             return cc.e_tot, de
         @property
         def converged(self):
             cc = self.base
             return all((cc._scf.converged, cc.converged, cc.converged_lambda))
+
     return CCSD_GradScanner(grad_cc)
 
 def _response_dm1(mycc, Xvo, eris=None):
     nvir, nocc = Xvo.shape
     nmo = nocc + nvir
-    with_frozen = not (mycc.frozen is None or mycc.frozen is 0)
+    with_frozen = not ((mycc.frozen is None)
+                       or (isinstance(mycc.frozen, (int, numpy.integer)) and mycc.frozen == 0)
+                       or (len(mycc.frozen) == 0))
     if eris is None or with_frozen:
         mo_energy = mycc._scf.mo_energy
         mo_occ = mycc.mo_occ
@@ -267,7 +278,7 @@ def _response_dm1(mycc, Xvo, eris=None):
             v = reduce(numpy.dot, (mo_coeff[:,nocc:].T, v, mo_coeff[:,:nocc]))
             return v * 2
     else:
-        mo_energy = eris.fock.diagonal()
+        mo_energy = eris.mo_energy
         mo_occ = numpy.zeros_like(mo_energy)
         mo_occ[:nocc] = 2
         ovvo = numpy.empty((nocc,nvir,nvir,nocc))
@@ -403,18 +414,12 @@ def _load_block_tril(h5dat, row0, row1, nao, out=None):
 def _cp(a):
     return numpy.array(a, copy=False, order='C')
 
-class Gradients(lib.StreamObject):
-    def __init__(self, mycc):
-        self.base = mycc
-        self.mol = mycc.mol
-        self.stdout = mycc.stdout
-        self.verbose = mycc.verbose
-        self.atmlst = None
-        self.de = None
-        self._keys = set(self.__dict__.keys())
+class Gradients(rhf_grad.GradientsBasics):
+
+    grad_elec = grad_elec
 
     def kernel(self, t1=None, t2=None, l1=None, l2=None, eris=None,
-               atmlst=None, mf_grad=None, verbose=None, _kern=kernel):
+               atmlst=None, verbose=None):
         log = logger.new_logger(self, verbose)
         mycc = self.base
         if t1 is None: t1 = mycc.t1
@@ -432,19 +437,24 @@ class Gradients(lib.StreamObject):
         else:
             self.atmlst = atmlst
 
-        self.de = _kern(mycc, t1, t2, l1, l2, eris, atmlst,
-                        mf_grad, verbose=log)
+        de = self.grad_elec(t1, t2, l1, l2, eris, atmlst, verbose=log)
+        self.de = de + self.grad_nuc(atmlst=atmlst)
+        if self.mol.symmetry:
+            self.de = self.symmetrize(self.de, atmlst)
         self._finalize()
         return self.de
 
-    def _finalize(self):
-        if self.verbose >= logger.NOTE:
-            logger.note(self, '--------------- %s gradients ---------------',
-                        self.base.__class__.__name__)
-            rhf_grad._write(self, self.mol, self.de, self.atmlst)
-            logger.note(self, '----------------------------------------------')
+    # Calling the underlying SCF nuclear gradients because it may be modified
+    # by external modules (e.g. QM/MM, solvent)
+    def grad_nuc(self, mol=None, atmlst=None):
+        mf_grad = self.base._scf.nuc_grad_method()
+        return mf_grad.grad_nuc(mol, atmlst)
 
     as_scanner = as_scanner
+
+Grad = Gradients
+
+ccsd.CCSD.Gradients = lib.class_as_method(Gradients)
 
 
 if __name__ == '__main__':
@@ -460,7 +470,7 @@ if __name__ == '__main__':
     )
     mf = scf.RHF(mol).run()
     mycc = ccsd.CCSD(mf).run()
-    g1 = Gradients(mycc).kernel()
+    g1 = mycc.Gradients().kernel()
 #[[ 0   0                1.00950925e-02]
 # [ 0   2.28063426e-02  -5.04754623e-03]
 # [ 0  -2.28063426e-02  -5.04754623e-03]]

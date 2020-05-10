@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #
 
 import ctypes
+import warnings
 import numpy
 from pyscf import lib
 from pyscf.lib import logger
@@ -144,7 +145,7 @@ class SelectedCI(selected_ci.SelectedCI):
                     orbsym=None, **kwargs):
         if orbsym is None:
             orbsym = self.orbsym
-        if hasattr(civec_strs, '_strs'):
+        if getattr(civec_strs, '_strs', None) is not None:
             self._strs = civec_strs._strs
         else:
             assert(civec_strs.size == len(self._strs[0])*len(self._strs[1]))
@@ -154,27 +155,53 @@ class SelectedCI(selected_ci.SelectedCI):
     def get_init_guess(self, ci_strs, norb, nelec, nroots, hdiag):
         '''Initial guess is the single Slater determinant
         '''
-        wfnsym = direct_spin1_symm._id_wfnsym(self, norb, nelec, self.wfnsym)
+        wfnsym = direct_spin1_symm._id_wfnsym(self, norb, nelec, self.orbsym,
+                                              self.wfnsym)
         airreps = direct_spin1_symm._gen_strs_irrep(ci_strs[0], self.orbsym)
         birreps = direct_spin1_symm._gen_strs_irrep(ci_strs[1], self.orbsym)
         ci0 = direct_spin1_symm._get_init_guess(airreps, birreps,
                                                 nroots, hdiag, self.orbsym, wfnsym)
         return [selected_ci._as_SCIvector(x, ci_strs) for x in ci0]
 
-    def guess_wfnsym(self, norb, nelec, fcivec=None, wfnsym=None, **kwargs):
+    def guess_wfnsym(self, norb, nelec, fcivec=None, orbsym=None, wfnsym=None,
+                     **kwargs):
+        if orbsym is None:
+            orbsym = self.orbsym
         if fcivec is None:
-            wfnsym = direct_spin1_symm._id_wfnsym(self, norb, nelec, wfnsym)
+            wfnsym = direct_spin1_symm._id_wfnsym(self, norb, nelec, orbsym, wfnsym)
+
+        elif wfnsym is None:
+            strsa, strsb = getattr(fcivec, '_strs', self._strs)
+            if isinstance(fcivec, numpy.ndarray) and fcivec.ndim <= 2:
+                wfnsym = addons._guess_wfnsym(fcivec, strsa, strsb, orbsym)
+            else:
+                wfnsym = [addons._guess_wfnsym(c, strsa, strsb, orbsym)
+                          for c in fcivec]
+                if any(wfnsym[0] != x for x in wfnsym):
+                    warnings.warn('Different wfnsym %s found in different CI vecotrs' % wfnsym)
+                wfnsym = wfnsym[0]
+
         else:
             strsa, strsb = getattr(fcivec, '_strs', self._strs)
-            wfnsym = addons._guess_wfnsym(fcivec, strsa, strsb, self.orbsym)
-        if 'verbose' in kwargs:
-            if isinstance(kwargs['verbose'], logger.Logger):
-                log = kwargs['verbose']
-            else:
-                log = logger.Logger(self.stdout, kwargs['verbose'])
-            log.debug('Guessing CI wfn symmetry = %s', wfnsym)
-        else:
-            logger.debug(self, 'Guessing CI wfn symmetry = %s', wfnsym)
+            na, nb = strsa.size, strsb.size
+
+            airreps = numpy.zeros(na, dtype=numpy.int32)
+            birreps = numpy.zeros(nb, dtype=numpy.int32)
+            for i, ir in enumerate(orbsym):
+                airreps[numpy.bitwise_and(strsa, 1<<i) > 0] ^= ir
+                birreps[numpy.bitwise_and(strsb, 1<<i) > 0] ^= ir
+
+            wfnsym = direct_spin1_symm._id_wfnsym(self, norb, nelec, orbsym, wfnsym)
+            mask = (airreps.reshape(-1,1) ^ birreps) == wfnsym
+
+            if isinstance(fcivec, numpy.ndarray) and fcivec.ndim <= 2:
+                fcivec = [fcivec]
+            if all(abs(c.reshape(na, nb)[mask]).max() < 1e-5 for c in fcivec):
+                raise RuntimeError('Input wfnsym is not consistent with fcivec coefficients')
+
+        verbose = kwargs.get('verbose', None)
+        log = logger.new_logger(self, verbose)
+        log.debug('Guessing CI wfn symmetry = %s', wfnsym)
         return wfnsym
 
     def kernel(self, h1e, eri, norb, nelec, ci0=None,
@@ -182,29 +209,26 @@ class SelectedCI(selected_ci.SelectedCI):
                nroots=None, davidson_only=None, pspace_size=None,
                orbsym=None, wfnsym=None, ecore=0, **kwargs):
         if nroots is None: nroots = self.nroots
-        if orbsym is not None:
-            self.orbsym, orbsym_bak = orbsym, self.orbsym
-        if wfnsym is not None:
-            self.wfnsym, wfnsym_bak = wfnsym, self.wfnsym
+        if orbsym is None: orbsym = self.orbsym
+        if wfnsym is None: wfnsym = self.wfnsym
         if self.verbose >= logger.WARN:
             self.check_sanity()
 
-        wfnsym0 = self.guess_wfnsym(norb, nelec, ci0, self.wfnsym, **kwargs)
-        e, c = selected_ci.kernel_float_space(self, h1e, eri, norb, nelec, ci0,
-                                              tol, lindep, max_cycle, max_space,
-                                              nroots, davidson_only, ecore=ecore,
-                                              **kwargs)
-        if self.wfnsym is not None:
-            strsa, strsb = c._strs
-            if nroots > 1:
-                c = [addons._symmetrize_wfn(ci, strsa, strsb, self.orbsym, wfnsym0)
-                     for ci in c]
-            else:
-                c = addons._symmetrize_wfn(c, strsa, strsb, self.orbsym, wfnsym0)
-        if orbsym is not None:
-            self.orbsym = orbsym_bak
-        if wfnsym is not None:
-            self.wfnsym = wfnsym_bak
+        with lib.temporary_env(self, orbsym=orbsym, wfnsym=wfnsym):
+            e, c = selected_ci.kernel_float_space(self, h1e, eri, norb, nelec, ci0,
+                                                  tol, lindep, max_cycle, max_space,
+                                                  nroots, davidson_only, ecore=ecore,
+                                                  **kwargs)
+            if wfnsym is not None:
+                wfnsym0 = self.guess_wfnsym(norb, nelec, ci0, orbsym, wfnsym, **kwargs)
+                strsa, strsb = c._strs
+                if nroots > 1:
+                    for i, ci in enumerate(c):
+                        ci = addons._symmetrize_wfn(ci, strsa, strsb, self.orbsym, wfnsym0)
+                        c[i] = selected_ci._as_SCIvector(ci, c._strs)
+                else:
+                    ci = addons._symmetrize_wfn(c, strsa, strsb, self.orbsym, wfnsym0)
+                    c = selected_ci._as_SCIvector(ci, c._strs)
 
         self.eci, self.ci = e, c
         return e, c
@@ -216,7 +240,6 @@ if __name__ == '__main__':
     from functools import reduce
     from pyscf import gto
     from pyscf import scf
-    from pyscf import ao2mo
     from pyscf import symm
     from pyscf.fci import cistring
 

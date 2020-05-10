@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ if __name__ == '__main__':
     import numpy
     from pyscf import lib
     from pyscf import gto
-    from pyscf import scf, dft
+    from pyscf import dft
 
     mol = gto.Mole()
     mol.verbose = 0

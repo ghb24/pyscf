@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,17 +16,16 @@
 # Author: Qiming Sun <osirpt.sun@gmail.com>
 #
 
-from functools import reduce
+import time
 import numpy
 from pyscf import symm
 from pyscf import lib
-from pyscf import dft
-from pyscf.dft import numint
+from pyscf import scf
 from pyscf.tdscf import uhf
 from pyscf.scf import uhf_symm
+from pyscf.scf import _response_functions  # noqa
 from pyscf.data import nist
-from pyscf.ao2mo import _ao2mo
-from pyscf.soscf.newton_ah import _gen_uhf_response
+from pyscf.dft.rks import KohnShamDFT
 from pyscf import __config__
 
 # Low excitation filter to avoid numerical instability
@@ -51,7 +50,6 @@ class TDDFTNoHybrid(TDA):
     '''
     def get_vind(self, mf):
         wfnsym = self.wfnsym
-        singlet = self.singlet
 
         mol = mf.mol
         mo_coeff = mf.mo_coeff
@@ -92,30 +90,30 @@ class TDDFTNoHybrid(TDA):
         ed_ia = e_ia.ravel() * d_ia
         hdiag = e_ia.ravel() ** 2
 
-        vresp = _gen_uhf_response(mf, mo_coeff, mo_occ, hermi=1)
+        vresp = mf.gen_response(mo_coeff, mo_occ, hermi=1)
 
         def vind(zs):
             nz = len(zs)
+            zs = numpy.asarray(zs).reshape(nz,-1)
             if wfnsym is not None and mol.symmetry:
                 zs = numpy.copy(zs)
                 zs[:,sym_forbid] = 0
-            dmov = numpy.empty((2,nz,nao,nao))
-            for i in range(nz):
-                z = d_ia * zs[i]
-                za = z[:nocca*nvira].reshape(nocca,nvira)
-                zb = z[nocca*nvira:].reshape(noccb,nvirb)
-                dm = reduce(numpy.dot, (orboa, za, orbva.T))
-                dmov[0,i] = dm + dm.T
-                dm = reduce(numpy.dot, (orbob, zb, orbvb.T))
-                dmov[1,i] = dm + dm.T
 
-            v1ao = vresp(dmov)
-            v1a = _ao2mo.nr_e2(v1ao[0], mo_coeff[0], (0,nocca,nocca,nmo))
-            v1b = _ao2mo.nr_e2(v1ao[1], mo_coeff[1], (0,noccb,noccb,nmo))
+            dmsa = (zs[:,:nocca*nvira] * d_ia[:nocca*nvira]).reshape(nz,nocca,nvira)
+            dmsb = (zs[:,nocca*nvira:] * d_ia[nocca*nvira:]).reshape(nz,noccb,nvirb)
+            dmsa = lib.einsum('xov,po,qv->xpq', dmsa, orboa, orbva.conj())
+            dmsb = lib.einsum('xov,po,qv->xpq', dmsb, orbob, orbvb.conj())
+            dmsa = dmsa + dmsa.conj().transpose(0,2,1)
+            dmsb = dmsb + dmsb.conj().transpose(0,2,1)
+
+            v1ao = vresp(numpy.asarray((dmsa,dmsb)))
+
+            v1a = lib.einsum('xpq,po,qv->xov', v1ao[0], orboa.conj(), orbva)
+            v1b = lib.einsum('xpq,po,qv->xov', v1ao[1], orbob.conj(), orbvb)
+
             hx = numpy.hstack((v1a.reshape(nz,-1), v1b.reshape(nz,-1)))
-            for i, z in enumerate(zs):
-                hx[i] += ed_ia * z
-                hx[i] *= d_ia
+            hx += ed_ia * zs
+            hx *= d_ia
             return hx
 
         return vind, hdiag
@@ -123,6 +121,7 @@ class TDDFTNoHybrid(TDA):
     def kernel(self, x0=None, nstates=None):
         '''TDDFT diagonalization solver
         '''
+        cpu0 = (time.clock(), time.time())
         mf = self._scf
         if mf._numint.libxc.is_hybrid_xc(mf.xc):
             raise RuntimeError('%s cannot be used with hybrid functional'
@@ -192,6 +191,7 @@ class TDDFTNoHybrid(TDA):
             lib.chkfile.save(self.chkfile, 'tddft/e', self.e)
             lib.chkfile.save(self.chkfile, 'tddft/xy', self.xy)
 
+        log.timer('TDDFT', *cpu0)
         log.note('Excited State energies (eV)\n%s', self.e * nist.HARTREE2EV)
         return self.e, self.xy
 
@@ -202,9 +202,8 @@ class TDDFTNoHybrid(TDA):
 
 class dRPA(TDDFTNoHybrid):
     def __init__(self, mf):
-        if not hasattr(mf, 'xc'):
+        if not isinstance(mf, KohnShamDFT):
             raise RuntimeError("direct RPA can only be applied with DFT; for HF+dRPA, use .xc='hf'")
-        from pyscf import scf
         mf = scf.addons.convert_to_uhf(mf)
         mf.xc = ''
         TDDFTNoHybrid.__init__(self, mf)
@@ -213,17 +212,32 @@ TDH = dRPA
 
 class dTDA(TDA):
     def __init__(self, mf):
-        if not hasattr(mf, 'xc'):
+        if not isinstance(mf, KohnShamDFT):
             raise RuntimeError("direct TDA can only be applied with DFT; for HF+dTDA, use .xc='hf'")
-        from pyscf import scf
         mf = scf.addons.convert_to_uhf(mf)
         mf.xc = ''
         TDA.__init__(self, mf)
 
 
+def tddft(mf):
+    '''Driver to create TDDFT or TDDFTNoHybrid object'''
+    if mf._numint.libxc.is_hybrid_xc(mf.xc):
+        return TDDFT(mf)
+    else:
+        return TDDFTNoHybrid(mf)
+
+from pyscf import dft
+dft.uks.UKS.TDA           = dft.uks_symm.UKS.TDA           = lib.class_as_method(TDA)
+dft.uks.UKS.TDHF          = dft.uks_symm.UKS.TDHF          = None
+#dft.uks.UKS.TDDFT         = dft.uks_symm.UKS.TDDFT         = lib.class_as_method(TDDFT)
+dft.uks.UKS.TDDFTNoHybrid = dft.uks_symm.UKS.TDDFTNoHybrid = lib.class_as_method(TDDFTNoHybrid)
+dft.uks.UKS.TDDFT         = dft.uks_symm.UKS.TDDFT         = tddft
+dft.uks.UKS.dTDA          = dft.uks_symm.UKS.dTDA          = lib.class_as_method(dTDA)
+dft.uks.UKS.dRPA          = dft.uks_symm.UKS.dRPA          = lib.class_as_method(dRPA)
+
+
 if __name__ == '__main__':
     from pyscf import gto
-    from pyscf import scf
     mol = gto.Mole()
     mol.verbose = 0
     mol.output = None
@@ -237,7 +251,7 @@ if __name__ == '__main__':
     mf = dft.UKS(mol)
     mf.xc = 'lda, vwn_rpa'
     mf.scf()
-    td = TDDFTNoHybrid(mf)
+    td = mf.TDDFTNoHybrid()
     #td.verbose = 5
     td.nstates = 5
     print(td.kernel()[0] * 27.2114)
@@ -246,7 +260,7 @@ if __name__ == '__main__':
     mf = dft.UKS(mol)
     mf.xc = 'b88,p86'
     mf.scf()
-    td = TDDFT(mf)
+    td = mf.TDDFT()
     td.nstates = 5
     #td.verbose = 5
     print(td.kernel()[0] * 27.2114)
@@ -255,7 +269,7 @@ if __name__ == '__main__':
     mf = dft.UKS(mol)
     mf.xc = 'lda,vwn'
     mf.scf()
-    td = TDA(mf)
+    td = mf.TDA()
     td.nstates = 5
     print(td.kernel()[0] * 27.2114)
 # [  9.01393088   9.01393088   9.68872733   9.68872733  12.42444633]

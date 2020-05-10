@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,11 +31,12 @@ direct_nosym        No            No             No**               Yes
 ** Hamiltonian is real but not hermitian, (ij|kl) != (ji|kl) ...
 '''
 
-import sys
+import warnings
 import ctypes
 import numpy
 import scipy.linalg
 from pyscf import lib
+from pyscf import ao2mo
 from pyscf.fci import cistring
 from pyscf.fci import direct_spin1
 
@@ -117,7 +118,7 @@ def absorb_h1e(h1e, eri, norb, nelec, fac=1):
     '''
     if not isinstance(nelec, (int, numpy.number)):
         nelec = sum(nelec)
-    h2e = eri.copy()
+    h2e = ao2mo.restore(1, eri.copy(), norb)
     f1e = h1e - numpy.einsum('jiik->jk', h2e) * .5
     f1e = f1e * (1./(nelec+1e-100))
     for k in range(norb):
@@ -134,6 +135,11 @@ def energy(h1e, eri, fcivec, norb, nelec, link_index=None):
 
 
 class FCISolver(direct_spin1.FCISolver):
+    def __init__(self, *args, **kwargs):
+        direct_spin1.FCISolver.__init__(self, *args, **kwargs)
+        # pspace constructor only supports Hermitian Hamiltonian
+        self.davidson_only = True
+
     def contract_1e(self, h1e, fcivec, norb, nelec, link_index=None):
         return contract_1e(h1e, fcivec, norb, nelec, link_index)
 
@@ -162,6 +168,28 @@ class FCISolver(direct_spin1.FCISolver):
         self.eci, self.ci = e, c
         return e, c
 
+    def eig(self, op, x0=None, precond=None, **kwargs):
+        if isinstance(op, numpy.ndarray):
+            self.converged = True
+            return scipy.linalg.eigh(op)
+
+        # TODO: check the hermitian of Hamiltonian then determine whether to
+        # call the non-hermitian diagonlization solver davidson_nosym1
+
+        warnings.warn('direct_nosym.kernel is not able to diagonalize '
+                      'non-Hermitian Hamiltonian. If h1e and h2e is not '
+                      'hermtian, calling symmetric diagonlization in eig '
+                      'can lead to wrong results.')
+
+        self.converged, e, ci = \
+                lib.davidson1(lambda xs: [op(x) for x in xs],
+                              x0, precond, lessio=self.lessio, **kwargs)
+        if kwargs.get('nroots', 1) == 1:
+            self.converged = self.converged[0]
+            e = e[0]
+            ci = ci[0]
+        return e, ci
+
 FCI = FCISolver
 
 def _unpack(norb, nelec, link_index):
@@ -182,7 +210,6 @@ if __name__ == '__main__':
     from functools import reduce
     from pyscf import gto
     from pyscf import scf
-    from pyscf import ao2mo
 
     mol = gto.Mole()
     mol.verbose = 0

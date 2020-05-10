@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ from pyscf import ao2mo
 from pyscf import scf
 from pyscf.lib import logger
 from pyscf.cc import ccsd
-from pyscf.cc import addons
 from pyscf.cc import gintermediates as imd
 from pyscf.cc.addons import spatial2spin, spin2spatial
 from pyscf import __config__
@@ -40,8 +39,8 @@ def update_amps(cc, t1, t2, eris):
     fock = eris.fock
 
     fov = fock[:nocc,nocc:]
-    foo = fock[:nocc,:nocc]
-    fvv = fock[nocc:,nocc:]
+    mo_e_o = eris.mo_energy[:nocc]
+    mo_e_v = eris.mo_energy[nocc:] + cc.level_shift
 
     tau = imd.make_tau(t2, t1, t1)
 
@@ -53,8 +52,8 @@ def update_amps(cc, t1, t2, eris):
     Wovvo = imd.cc_Wovvo(t1, t2, eris)
 
     # Move energy terms to the other side
-    Fvv -= np.diag(np.diag(fvv))
-    Foo -= np.diag(np.diag(foo))
+    Fvv[np.diag_indices(nvir)] -= mo_e_v
+    Foo[np.diag_indices(nocc)] -= mo_e_o
 
     # T1 equation
     t1new  =  einsum('ie,ae->ia', t1, Fvv)
@@ -85,8 +84,7 @@ def update_amps(cc, t1, t2, eris):
     tmp = einsum('ma,ijmb->ijab', t1, np.asarray(eris.ooov).conj())
     t2new -= (tmp - tmp.transpose(0,1,3,2))
 
-    mo_e = eris.fock.diagonal().real
-    eia = mo_e[:nocc,None] - mo_e[None,nocc:]
+    eia = mo_e_o[:,None] - mo_e_v
     eijab = lib.direct_sum('ia,jb->ijab', eia, eia)
     t1new /= eia
     t2new /= eijab
@@ -118,14 +116,14 @@ class GCCSD(ccsd.CCSD):
     conv_tol = getattr(__config__, 'cc_gccsd_GCCSD_conv_tol', 1e-7)
     conv_tol_normt = getattr(__config__, 'cc_gccsd_GCCSD_conv_tol_normt', 1e-6)
 
-    def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
         assert(isinstance(mf, scf.ghf.GHF))
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
 
     def init_amps(self, eris=None):
         if eris is None:
             eris = self.ao2mo(self.mo_coeff)
-        mo_e = eris.fock.diagonal().real
+        mo_e = eris.mo_energy
         nocc = self.nocc
         eia = mo_e[:nocc,None] - mo_e[None,nocc:]
         eijab = lib.direct_sum('ia,jb->ijab', eia, eia)
@@ -157,14 +155,13 @@ class GCCSD(ccsd.CCSD):
             return self.e_corr, self.t1, self.t2
 
         # Initialize orbspin so that we can attach it to t1, t2
-        if not hasattr(self.mo_coeff, 'orbspin'):
+        if getattr(self.mo_coeff, 'orbspin', None) is None:
             orbspin = scf.ghf.guess_orbspin(self.mo_coeff)
             if not np.any(orbspin == -1):
                 self.mo_coeff = lib.tag_array(self.mo_coeff, orbspin=orbspin)
-        if eris is None: eris = self.ao2mo(self.mo_coeff)
 
         e_corr, self.t1, self.t2 = ccsd.CCSD.ccsd(self, t1, t2, eris)
-        if hasattr(eris, 'orbspin') and eris.orbspin is not None:
+        if getattr(eris, 'orbspin', None) is not None:
             self.t1 = lib.tag_array(self.t1, orbspin=eris.orbspin)
             self.t2 = lib.tag_array(self.t2, orbspin=eris.orbspin)
         return e_corr, self.t1, self.t2
@@ -176,6 +173,12 @@ class GCCSD(ccsd.CCSD):
         if nocc is None: nocc = self.nocc
         if nmo is None: nmo = self.nmo
         return vector_to_amplitudes(vec, nmo, nocc)
+
+    def vector_size(self, nmo=None, nocc=None):
+        if nocc is None: nocc = self.nocc
+        if nmo is None: nmo = self.nmo
+        nvir = nmo - nocc
+        return nocc * nvir + nocc*(nocc-1)//2*nvir*(nvir-1)//2
 
     def amplitudes_from_rccsd(self, t1, t2, orbspin=None):
         return amplitudes_from_rccsd(t1, t2, orbspin)
@@ -229,7 +232,7 @@ class GCCSD(ccsd.CCSD):
         from pyscf.cc import eom_gccsd
         return eom_gccsd.EOMEE(self)
 
-    def make_rdm1(self, t1=None, t2=None, l1=None, l2=None):
+    def make_rdm1(self, t1=None, t2=None, l1=None, l2=None, ao_repr=False):
         '''Un-relaxed 1-particle density matrix in MO space'''
         from pyscf.cc import gccsd_rdm
         if t1 is None: t1 = self.t1
@@ -237,9 +240,9 @@ class GCCSD(ccsd.CCSD):
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return gccsd_rdm.make_rdm1(self, t1, t2, l1, l2)
+        return gccsd_rdm.make_rdm1(self, t1, t2, l1, l2, ao_repr=ao_repr)
 
-    def make_rdm2(self, t1=None, t2=None, l1=None, l2=None):
+    def make_rdm2(self, t1=None, t2=None, l1=None, l2=None, ao_repr=False):
         '''2-particle density matrix in MO space.  The density matrix is
         stored as
 
@@ -251,7 +254,7 @@ class GCCSD(ccsd.CCSD):
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return gccsd_rdm.make_rdm2(self, t1, t2, l1, l2)
+        return gccsd_rdm.make_rdm2(self, t1, t2, l1, l2, ao_repr=ao_repr)
 
     def ao2mo(self, mo_coeff=None):
         nmo = self.nmo
@@ -260,7 +263,7 @@ class GCCSD(ccsd.CCSD):
         if (self._scf._eri is not None and
             (mem_incore+mem_now < self.max_memory) or self.mol.incore_anyway):
             return _make_eris_incore(self, mo_coeff)
-        elif hasattr(self._scf, 'with_df'):
+        elif getattr(self._scf, 'with_df', None):
             raise NotImplementedError
         else:
             return _make_eris_outcore(self, mo_coeff)
@@ -289,6 +292,23 @@ class GCCSD(ccsd.CCSD):
     def nuc_grad_method(self):
         raise NotImplementedError
 
+    def get_t1_diagnostic(self, t1=None):
+        if t1 is None: t1 = self.t1
+        raise NotImplementedError
+        #return get_t1_diagnostic(t1)
+
+    def get_d1_diagnostic(self, t1=None):
+        if t1 is None: t1 = self.t1
+        raise NotImplementedError
+        #return get_d1_diagnostic(t1)
+
+    def get_d2_diagnostic(self, t2=None):
+        if t2 is None: t2 = self.t2
+        raise NotImplementedError
+        #return get_d2_diagnostic(self.spin2spatial(t2))
+
+CCSD = GCCSD
+
 
 class _PhysicistsERIs:
     '''<pq||rs> = <pq|rs> - <pq|sr>'''
@@ -297,6 +317,7 @@ class _PhysicistsERIs:
         self.mo_coeff = None
         self.nocc = None
         self.fock = None
+        self.e_hf = None
         self.orbspin = None
 
         self.oooo = None
@@ -311,31 +332,33 @@ class _PhysicistsERIs:
         if mo_coeff is None:
             mo_coeff = mycc.mo_coeff
         mo_idx = ccsd.get_frozen_mask(mycc)
-        if hasattr(mo_coeff, 'orbspin'):
+        if getattr(mo_coeff, 'orbspin', None) is not None:
             self.orbspin = mo_coeff.orbspin[mo_idx]
             mo_coeff = lib.tag_array(mo_coeff[:,mo_idx], orbspin=self.orbspin)
-            self.mo_coeff = mo_coeff
         else:
             orbspin = scf.ghf.guess_orbspin(mo_coeff)
-            self.mo_coeff = mo_coeff = mo_coeff[:,mo_idx]
+            mo_coeff = mo_coeff[:,mo_idx]
             if not np.any(orbspin == -1):
                 self.orbspin = orbspin[mo_idx]
-                self.mo_coeff = lib.tag_array(mo_coeff, orbspin=self.orbspin)
+                mo_coeff = lib.tag_array(mo_coeff, orbspin=self.orbspin)
+        self.mo_coeff = mo_coeff
 
         # Note: Recomputed fock matrix since SCF may not be fully converged.
         dm = mycc._scf.make_rdm1(mycc.mo_coeff, mycc.mo_occ)
-        fockao = mycc._scf.get_hcore() + mycc._scf.get_veff(mycc.mol, dm)
+        vhf = mycc._scf.get_veff(mycc.mol, dm)
+        fockao = mycc._scf.get_fock(vhf=vhf, dm=dm)
         self.fock = reduce(np.dot, (mo_coeff.conj().T, fockao, mo_coeff))
+        self.e_hf = mycc._scf.energy_tot(dm=dm, vhf=vhf)
         self.nocc = mycc.nocc
+        self.mol = mycc.mol
 
-        mo_e = self.fock.diagonal()
+        mo_e = self.mo_energy = self.fock.diagonal().real
         gap = abs(mo_e[:self.nocc,None] - mo_e[None,self.nocc:]).min()
         if gap < 1e-5:
             logger.warn(mycc, 'HOMO-LUMO gap %s too small for GCCSD', gap)
         return self
 
 def _make_eris_incore(mycc, mo_coeff=None, ao2mofn=None):
-    cput0 = (time.clock(), time.time())
     eris = _PhysicistsERIs()
     eris._common_init_(mycc, mo_coeff)
     nocc = eris.nocc
@@ -364,8 +387,10 @@ def _make_eris_incore(mycc, mo_coeff=None, ao2mofn=None):
             eri[sym_forbid,:] = 0
             eri[:,sym_forbid] = 0
 
-        eri = ao2mo.restore(1, eri, nmo)
+        if eri.dtype == np.double:
+            eri = ao2mo.restore(1, eri, nmo)
 
+    eri = eri.reshape(nmo,nmo,nmo,nmo)
     eri = eri.transpose(0,2,1,3) - eri.transpose(0,2,3,1)
 
     eris.oooo = eri[:nocc,:nocc,:nocc,:nocc].copy()
@@ -392,12 +417,13 @@ def _make_eris_outcore(mycc, mo_coeff=None):
     orbspin = eris.orbspin
 
     feri = eris.feri = lib.H5TmpFile()
-    eris.oooo = feri.create_dataset('oooo', (nocc,nocc,nocc,nocc), 'f8')
-    eris.ooov = feri.create_dataset('ooov', (nocc,nocc,nocc,nvir), 'f8')
-    eris.oovv = feri.create_dataset('oovv', (nocc,nocc,nvir,nvir), 'f8')
-    eris.ovov = feri.create_dataset('ovov', (nocc,nvir,nocc,nvir), 'f8')
-    eris.ovvo = feri.create_dataset('ovvo', (nocc,nvir,nvir,nocc), 'f8')
-    eris.ovvv = feri.create_dataset('ovvv', (nocc,nvir,nvir,nvir), 'f8')
+    dtype = np.result_type(eris.mo_coeff).char
+    eris.oooo = feri.create_dataset('oooo', (nocc,nocc,nocc,nocc), dtype)
+    eris.ooov = feri.create_dataset('ooov', (nocc,nocc,nocc,nvir), dtype)
+    eris.oovv = feri.create_dataset('oovv', (nocc,nocc,nvir,nvir), dtype)
+    eris.ovov = feri.create_dataset('ovov', (nocc,nvir,nocc,nvir), dtype)
+    eris.ovvo = feri.create_dataset('ovvo', (nocc,nvir,nvir,nocc), dtype)
+    eris.ovvv = feri.create_dataset('ovvv', (nocc,nvir,nvir,nvir), dtype)
 
     if orbspin is None:
         orbo_a = mo_a[:,:nocc]
@@ -440,7 +466,7 @@ def _make_eris_outcore(mycc, mo_coeff=None):
             tmp = None
         cput0 = log.timer_debug1('transforming ovvv', *cput0)
 
-        eris.vvvv = feri.create_dataset('vvvv', (nvir,nvir,nvir,nvir), 'f8')
+        eris.vvvv = feri.create_dataset('vvvv', (nvir,nvir,nvir,nvir), dtype)
         tril2sq = lib.square_mat_in_trilu_indices(nvir)
         fswap = lib.H5TmpFile()
         ao2mo.kernel(mycc.mol, (orbv_a,orbv_a,orbv_a,orbv_a), fswap, 'aaaa',
@@ -508,7 +534,7 @@ def _make_eris_outcore(mycc, mo_coeff=None):
             tmp = None
         cput0 = log.timer_debug1('transforming ovvv', *cput0)
 
-        eris.vvvv = feri.create_dataset('vvvv', (nvir,nvir,nvir,nvir), 'f8')
+        eris.vvvv = feri.create_dataset('vvvv', (nvir,nvir,nvir,nvir), dtype)
         sym_forbid = (orbspin[nocc:,None]!=orbspin[nocc:])[np.tril_indices(nvir)]
         tril2sq = lib.square_mat_in_trilu_indices(nvir)
 
@@ -539,7 +565,6 @@ def _make_eris_outcore(mycc, mo_coeff=None):
 
 
 if __name__ == '__main__':
-    from pyscf import scf
     from pyscf import gto
     mol = gto.Mole()
     mol.atom = [['O', (0.,   0., 0.)],

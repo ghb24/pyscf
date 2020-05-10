@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #
 
 import time
-from functools import reduce
 import numpy
 import pyscf.lib.logger as logger
 from pyscf.mcscf import mc1step
@@ -36,9 +35,12 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
 
     mo = mo_coeff
     nmo = mo.shape[1]
+    ncore = casscf.ncore
+    ncas = casscf.ncas
+    nocc = ncore + ncas
     eris = casscf.ao2mo(mo)
     e_tot, e_cas, fcivec = casscf.casci(mo, ci0, eris, log, locals())
-    if casscf.ncas == nmo and not casscf.internal_rotation:
+    if ncas == nmo and not casscf.internal_rotation:
         if casscf.canonicalization:
             log.debug('CASSCF canonicalization')
             mo, fcivec, mo_energy = casscf.canonicalize(mo, fcivec, eris,
@@ -65,7 +67,7 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
         njk = 0
         t3m = t2m
         casdm1_old = casdm1
-        casdm1, casdm2 = casscf.fcisolver.make_rdm12(fcivec, casscf.ncas, casscf.nelecas)
+        casdm1, casdm2 = casscf.fcisolver.make_rdm12(fcivec, ncas, casscf.nelecas)
         norm_ddm = numpy.linalg.norm(casdm1 - casdm1_old)
         t3m = log.timer('update CAS DM', *t3m)
         max_cycle_micro = 1 # casscf.micro_cycle_scheduler(locals())
@@ -133,8 +135,7 @@ def kernel(casscf, mo_coeff, tol=1e-7, conv_tol_grad=None,
                 casscf.canonicalize(mo, fcivec, eris, casscf.sorting_mo_energy,
                                     casscf.natorb, casdm1, log)
         if casscf.natorb and dump_chk: # dump_chk may save casdm1
-            nocc = casscf.ncore + casscf.ncas
-            occ, ucas = casscf._eig(-casdm1, casscf.ncore, nocc)
+            occ, ucas = casscf._eig(-casdm1, ncore, nocc)
             casdm1 = numpy.diag(-occ)
 
     if dump_chk:

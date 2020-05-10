@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -48,6 +48,8 @@ CLASSIFIERS = [
 'Programming Language :: Python :: 3.4',
 'Programming Language :: Python :: 3.5',
 'Programming Language :: Python :: 3.6',
+'Programming Language :: Python :: 3.7',
+'Programming Language :: Python :: 3.8',
 'Topic :: Software Development',
 'Topic :: Scientific/Engineering',
 'Operating System :: POSIX',
@@ -61,7 +63,7 @@ MAINTAINER_EMAIL = 'osirpt.sun@gmail.com'
 DESCRIPTION      = 'PySCF: Python-based Simulations of Chemistry Framework'
 #LONG_DESCRIPTION = ''
 URL              = 'http://www.pyscf.org'
-DOWNLOAD_URL     = 'http://github.com/sunqm/pyscf'
+DOWNLOAD_URL     = 'http://github.com/pyscf/pyscf'
 LICENSE          = 'Apache License 2.0'
 AUTHOR           = 'Qiming Sun'
 AUTHOR_EMAIL     = 'osirpt.sun@gmail.com'
@@ -118,6 +120,12 @@ elif sys.platform.startswith('darwin'):
 elif sys.platform.startswith('win'):
     ostype = 'windows'
     so_ext = '.dll'
+elif sys.platform.startswith('aix') or sys.platform.startswith('os400'):
+    ostype = 'aix'
+    so_ext = '.so'
+    LD_LIBRARY_PATH = 'LIBPATH'
+    if(os.environ.get('PYSCF_INC_DIR') is None):
+        os.environ['PYSCF_INC_DIR'] = '/QOpenSys/pkgs:/QOpenSys/usr:/usr:/usr/local'
 else:
     raise OSError('Unknown platform')
     ostype = None
@@ -272,6 +280,10 @@ def make_ext(pkg_name, relpath, srcs, libraries=[], library_dirs=default_lib_dir
             soname = pkg_name.split('.')[-1]
             extra_link_flags = extra_link_flags + ['-install_name', '@loader_path/'+soname+so_ext]
             runtime_library_dirs = []
+        elif sys.platform.startswith('aix') or sys.platform.startswith('os400'):
+            extra_compile_flags = extra_compile_flags + ['-fopenmp']
+            extra_link_flags = extra_link_flags + ['-lblas', '-lgomp', '-Wl,-brtl']
+            runtime_library_dirs = ['$ORIGIN', '.']
         else:
             extra_compile_flags = extra_compile_flags + ['-fopenmp']
             extra_link_flags = extra_link_flags + ['-fopenmp']
@@ -355,7 +367,7 @@ extensions += [
     make_ext('pyscf.lib.libcvhf', 'vhf',
              '''fill_nr_s8.c nr_incore.c nr_direct.c optimizer.c nr_direct_dot.c
              time_rev.c r_direct_o1.c rkb_screen.c r_direct_dot.c
-             rah_direct_dot.c rha_direct_dot.c''',
+             rah_direct_dot.c rha_direct_dot.c hessian_screen.c''',
              ['cgto', 'np_helper', 'cint']),
     make_ext('pyscf.lib.libao2mo', 'ao2mo',
              'restore_eri.c nr_ao2mo.c nr_incore.c r_ao2mo.c',
@@ -389,7 +401,7 @@ if 1:
     libxc_lib_path = search_lib_path('libxc'+so_ext, [pyscf_lib_dir,
                                                       os.path.join(pyscf_lib_dir, 'deps', 'lib'),
                                                       os.path.join(pyscf_lib_dir, 'deps', 'lib64')],
-                                     version='4.0.0')
+                                     version='5')
     libxc_inc_path = search_inc_path('xc.h', [pyscf_lib_dir,
                                               os.path.join(pyscf_lib_dir, 'deps', 'include')])
     if libxc_lib_path and libxc_inc_path:
@@ -405,7 +417,7 @@ if 1:
     else:
         print("****************************************************************")
         print("*** WARNING: libxc library not found.")
-        print("* You can download libxc library from http://www.tddft.org/programs/octopus/down.php?file=libxc/libxc-3.0.0.tar.gz")
+        print("* You can download libxc library from http://www.tddft.org/programs/libxc/down.php?file=4.3.4/libxc-4.3.4.tar.gz")
         print("* libxc library needs to be compiled with the flag --enable-shared")
         print("* May need to set PYSCF_INC_DIR if libxc library was not installed in the")
         print("* system standard install path (/usr, /usr/local, etc). Eg")
@@ -465,7 +477,7 @@ setup(
     author_email=AUTHOR_EMAIL,
     platforms=PLATFORMS,
     #package_dir={'pyscf': 'pyscf'},  # packages are under directory pyscf
-    #include *.so *.dat files. They are now placed in MAINTAINER.in
+    #include *.so *.dat files. They are now placed in MANIFEST.in
     #package_data={'': ['*.so', '*.dylib', '*.dll', '*.dat']},
     include_package_data=True,  # include everything in source control
     packages=find_packages(exclude=['*dmrgscf*', '*fciqmcscf*', '*icmpspt*',
@@ -476,6 +488,9 @@ setup(
     cmdclass={'build_ext': BuildExtWithoutPlatformSuffix,
               'install': PostInstallCommand},
     install_requires=['numpy', 'scipy', 'h5py'],
+    extras_require={
+        'geomopt': ['pyberny>=0.6.2', 'geometric'],
+    },
     setup_requires = ['numpy'],
 )
 

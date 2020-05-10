@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 # Author: Qiming Sun <osirpt.sun@gmail.com>
 #
 
-import copy
 from functools import reduce
 import numpy
 import scipy.linalg
@@ -270,7 +269,7 @@ def orth_ao(mf_or_mol, method=ORTH_METHOD, pre_orth_ao=None, scf_method=None,
             mf = mf_or_mol
 
     if s is None:
-        if hasattr(mol, 'pbc_intor'):  # whether mol object is a cell
+        if getattr(mol, 'pbc_intor', None):  # whether mol object is a cell
             s = mol.pbc_intor('int1e_ovlp', hermi=1)
         else:
             s = mol.intor_symmetric('int1e_ovlp')
@@ -299,7 +298,6 @@ del(ORTH_METHOD)
 
 
 if __name__ == '__main__':
-    from pyscf import gto
     from pyscf import scf
     from pyscf.lo import nao
     mol = gto.Mole()

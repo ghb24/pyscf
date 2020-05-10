@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@
 
 import numpy
 from pyscf import lib
-from pyscf.lib import logger
 from pyscf.cc import uccsd_rdm
 
 def _gamma1_intermediates(mycc, t1, t2, l1, l2, eris=None, for_grad=False):
@@ -29,10 +28,7 @@ def _gamma1_intermediates(mycc, t1, t2, l1, l2, eris=None, for_grad=False):
     t1a, t1b = t1
     t2aa, t2ab, t2bb = t2
     nocca, noccb, nvira, nvirb = t2ab.shape
-    nmoa = eris.focka.shape[0]
-    nmob = eris.fockb.shape[0]
-    mo_ea = eris.focka.diagonal().real
-    mo_eb = eris.fockb.diagonal().real
+    mo_ea, mo_eb = eris.mo_energy
     eia = mo_ea[:nocca,None] - mo_ea[nocca:]
     eIA = mo_eb[:noccb,None] - mo_eb[noccb:]
     fvo = eris.focka[nocca:,:nocca]
@@ -156,8 +152,7 @@ def _gamma2_intermediates(mycc, t1, t2, l1, l2, eris=None,
     nocca, noccb, nvira, nvirb = t2ab.shape
     nmoa = eris.focka.shape[0]
     nmob = eris.fockb.shape[0]
-    mo_ea = eris.focka.diagonal().real
-    mo_eb = eris.fockb.diagonal().real
+    mo_ea, mo_eb = eris.mo_energy
     eia = mo_ea[:nocca,None] - mo_ea[nocca:]
     eIA = mo_eb[:noccb,None] - mo_eb[noccb:]
     fvo = eris.focka[nocca:,:nocca]
@@ -273,9 +268,9 @@ def _gamma2_intermediates(mycc, t1, t2, l1, l2, eris=None,
 def _gamma2_outcore(mycc, t1, t2, l1, l2, eris, h5fobj, compress_vvvv=False):
     return _gamma2_intermediates(mycc, t1, t2, l1, l2, eris, compress_vvvv)
 
-def make_rdm1(mycc, t1, t2, l1, l2, eris=None):
+def make_rdm1(mycc, t1, t2, l1, l2, eris=None, ao_repr=False):
     d1 = _gamma1_intermediates(mycc, t1, t2, l1, l2, eris)
-    return uccsd_rdm._make_rdm1(mycc, d1, True)
+    return uccsd_rdm._make_rdm1(mycc, d1, True, ao_repr=ao_repr)
 
 # rdm2 in Chemist's notation
 def make_rdm2(mycc, t1, t2, l1, l2, eris=None):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,7 +33,7 @@ def kernel(hobj):
     atmlst = numpy.where(atom_charges != 0)[0]  # Exclude ghost atoms
     natm = len(atmlst)
     mass = numpy.array([elements.MASSES[atom_charges[i]] for i in atmlst])
-    reduced_mass = 1./(1./mass).sum()
+    #reduced_mass = 1./(1./mass).sum()
 
     if hobj.nroots is None:
         h = hobj.hess(atmlst=atmlst)

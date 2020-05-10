@@ -107,14 +107,66 @@ int CVHFnrs8_prescreen(int *shls, CVHFOpt *opt,
         assert(k < n);
         assert(l < n);
         double qijkl = q_cond[i*n+j] * q_cond[k*n+l];
-        double dmin = opt->direct_scf_cutoff / qijkl;
-        return qijkl > opt->direct_scf_cutoff
-            &&((4*dm_cond[j*n+i] > dmin)
-            || (4*dm_cond[l*n+k] > dmin)
-            || (  dm_cond[j*n+k] > dmin)
-            || (  dm_cond[j*n+l] > dmin)
-            || (  dm_cond[i*n+k] > dmin)
-            || (  dm_cond[i*n+l] > dmin));
+        double direct_scf_cutoff = opt->direct_scf_cutoff;
+        return qijkl > direct_scf_cutoff
+            &&((4*dm_cond[j*n+i]*qijkl > direct_scf_cutoff)
+            || (4*dm_cond[l*n+k]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[j*n+k]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[j*n+l]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[i*n+k]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[i*n+l]*qijkl > direct_scf_cutoff));
+}
+
+int CVHFnrs8_vj_prescreen(int *shls, CVHFOpt *opt,
+                          int *atm, int *bas, double *env)
+{
+        if (!opt) {
+                return 1; // no screen
+        }
+        int i = shls[0];
+        int j = shls[1];
+        int k = shls[2];
+        int l = shls[3];
+        int n = opt->nbas;
+        assert(opt->q_cond);
+        assert(opt->dm_cond);
+        assert(i < n);
+        assert(j < n);
+        assert(k < n);
+        assert(l < n);
+        double direct_scf_cutoff = opt->direct_scf_cutoff;
+        double qijkl = opt->q_cond[i*n+j] * opt->q_cond[k*n+l];
+        return qijkl > direct_scf_cutoff
+            &&((4*qijkl*opt->dm_cond[j*n+i] > direct_scf_cutoff)
+            || (4*qijkl*opt->dm_cond[l*n+k] > direct_scf_cutoff));
+}
+
+int CVHFnrs8_vk_prescreen(int *shls, CVHFOpt *opt,
+                          int *atm, int *bas, double *env)
+{
+        if (!opt) {
+                return 1; // no screen
+        }
+        int i = shls[0];
+        int j = shls[1];
+        int k = shls[2];
+        int l = shls[3];
+        int n = opt->nbas;
+        double *q_cond = opt->q_cond;
+        double *dm_cond = opt->dm_cond;
+        assert(q_cond);
+        assert(dm_cond);
+        assert(i < n);
+        assert(j < n);
+        assert(k < n);
+        assert(l < n);
+        double qijkl = q_cond[i*n+j] * q_cond[k*n+l];
+        double direct_scf_cutoff = opt->direct_scf_cutoff;
+        return qijkl > direct_scf_cutoff
+            &&((  dm_cond[j*n+k]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[j*n+l]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[i*n+k]*qijkl > direct_scf_cutoff)
+            || (  dm_cond[i*n+l]*qijkl > direct_scf_cutoff));
 }
 
 // return flag to decide whether transpose01324
@@ -129,6 +181,74 @@ int CVHFr_vknoscreen(int *shls, CVHFOpt *opt,
         *dm_atleast = 0;
         return 1;
 }
+
+int CVHFnr3c2e_vj_pass1_prescreen(int *shls, CVHFOpt *opt,
+                               int *atm, int *bas, double *env)
+{
+        if (!opt) {
+                return 1; // no screen
+        }
+        int n = opt->nbas;
+        int i = shls[0];
+        int j = shls[1];
+        // Be careful with the range of basis k, which is between nbas and
+        // nbas+nauxbas. See shls_slice in df_jk.get_j function.
+        int k = shls[2] - n;
+        assert(opt->q_cond);
+        assert(opt->dm_cond);
+        assert(i < n);
+        assert(j < n);
+        assert(k < n);
+        double direct_scf_cutoff = opt->direct_scf_cutoff;
+        double qijkl = opt->q_cond[i*n+j] * opt->q_cond[n*n+k];
+        return qijkl > direct_scf_cutoff
+            && (4*qijkl*opt->dm_cond[j*n+i] > direct_scf_cutoff);
+}
+
+int CVHFnr3c2e_vj_pass2_prescreen(int *shls, CVHFOpt *opt,
+                               int *atm, int *bas, double *env)
+{
+        if (!opt) {
+                return 1; // no screen
+        }
+        int n = opt->nbas;
+        int i = shls[0];
+        int j = shls[1];
+        // Be careful with the range of basis k, which is between nbas and
+        // nbas+nauxbas. See shls_slice in df_jk.get_j function.
+        int k = shls[2] - n;
+        assert(opt->q_cond);
+        assert(opt->dm_cond);
+        assert(i < n);
+        assert(j < n);
+        assert(k < n);
+        double direct_scf_cutoff = opt->direct_scf_cutoff;
+        double qijkl = opt->q_cond[i*n+j] * opt->q_cond[n*n+k];
+        return qijkl > direct_scf_cutoff
+            && (4*qijkl*opt->dm_cond[k] > direct_scf_cutoff);
+}
+
+int CVHFnr3c2e_schwarz_cond(int *shls, CVHFOpt *opt,
+                            int *atm, int *bas, double *env)
+{
+        if (!opt) {
+                return 1; // no screen
+        }
+        int n = opt->nbas;
+        int i = shls[0];
+        int j = shls[1];
+        // Be careful with the range of basis k, which is between nbas and
+        // nbas+nauxbas. See shls_slice in df_jk.get_j function.
+        int k = shls[2] - n;
+        assert(opt->q_cond);
+        assert(opt->dm_cond);
+        assert(i < n);
+        assert(j < n);
+        assert(k < n);
+        double qijkl = opt->q_cond[i*n+j] * opt->q_cond[n*n+k];
+        return qijkl > opt->direct_scf_cutoff;
+}
+
 
 void CVHFset_direct_scf_cutoff(CVHFOpt *opt, double cutoff)
 {
@@ -149,12 +269,25 @@ void CVHFsetnr_direct_scf(CVHFOpt *opt, int (*intor)(), CINTOpt *cintopt,
         if (opt->q_cond) {
                 free(opt->q_cond);
         }
+        // nbas in the input arguments may different to opt->nbas.
+        // Use opt->nbas because it is used in the prescreen function
+        nbas = opt->nbas;
         opt->q_cond = (double *)malloc(sizeof(double) * nbas*nbas);
+        CVHFset_int2e_q_cond(intor, cintopt, opt->q_cond, ao_loc,
+                             atm, natm, bas, nbas, env);
+}
+
+/*
+ * Non-relativistic 2-electron integrals
+ */
+void CVHFset_int2e_q_cond(int (*intor)(), CINTOpt *cintopt, double *q_cond,
+                          int *ao_loc, int *atm, int natm,
+                          int *bas, int nbas, double *env)
+{
         int shls_slice[] = {0, nbas};
         const int cache_size = GTOmax_cache_size(intor, shls_slice, 1,
                                                  atm, natm, bas, nbas, env);
-#pragma omp parallel default(none) \
-        shared(opt, intor, cintopt, ao_loc, atm, natm, bas, nbas, env)
+#pragma omp parallel
 {
         double qtmp, tmp;
         int ij, i, j, di, dj, ish, jsh;
@@ -186,12 +319,21 @@ void CVHFsetnr_direct_scf(CVHFOpt *opt, int (*intor)(), CINTOpt *cintopt,
                         } }
                         qtmp = sqrt(qtmp);
                 }
-                opt->q_cond[ish*nbas+jsh] = qtmp;
-                opt->q_cond[jsh*nbas+ish] = qtmp;
+                q_cond[ish*nbas+jsh] = qtmp;
+                q_cond[jsh*nbas+ish] = qtmp;
         }
         free(buf);
         free(cache);
 }
+}
+
+void CVHFset_q_cond(CVHFOpt *opt, double *q_cond, int len)
+{
+        if (opt->q_cond) {
+                free(opt->q_cond);
+        }
+        opt->q_cond = (double *)malloc(sizeof(double) * len);
+        memcpy(opt->q_cond, q_cond, sizeof(double) * len);
 }
 
 void CVHFsetnr_direct_scf_dm(CVHFOpt *opt, double *dm, int nset, int *ao_loc,
@@ -200,10 +342,13 @@ void CVHFsetnr_direct_scf_dm(CVHFOpt *opt, double *dm, int nset, int *ao_loc,
         if (opt->dm_cond) { // NOT reuse opt->dm_cond because nset may be diff in different call
                 free(opt->dm_cond);
         }
+        // nbas in the input arguments may different to opt->nbas.
+        // Use opt->nbas because it is used in the prescreen function
+        nbas = opt->nbas;
         opt->dm_cond = (double *)malloc(sizeof(double) * nbas*nbas);
         memset(opt->dm_cond, 0, sizeof(double)*nbas*nbas);
 
-        const int nao = ao_loc[nbas];
+        const size_t nao = ao_loc[nbas];
         double dmax, tmp;
         int i, j, ish, jsh;
         int iset;
@@ -216,8 +361,8 @@ void CVHFsetnr_direct_scf_dm(CVHFOpt *opt, double *dm, int nset, int *ao_loc,
                         for (i = ao_loc[ish]; i < ao_loc[ish+1]; i++) {
                         for (j = ao_loc[jsh]; j < ao_loc[jsh+1]; j++) {
 // symmetrize dm_cond because nrs8_prescreen only tests the lower (or upper)
-// triangular part of dm_cond. If density matrix is not hermitian, some
-// integrals may be skipped incorrectly.
+// triangular part of dm_cond. Without the symmetrization, some integrals may be
+// incorrectly skipped.
                                 tmp = .5 * (fabs(pdm[i*nao+j]) + fabs(pdm[j*nao+i]));
                                 dmax = MAX(dmax, tmp);
                         } }
@@ -225,6 +370,15 @@ void CVHFsetnr_direct_scf_dm(CVHFOpt *opt, double *dm, int nset, int *ao_loc,
                 opt->dm_cond[ish*nbas+jsh] = dmax;
                 opt->dm_cond[jsh*nbas+ish] = dmax;
         } }
+}
+
+void CVHFset_dm_cond(CVHFOpt *opt, double *dm_cond, int len)
+{
+        if (opt->dm_cond) {
+                free(opt->dm_cond);
+        }
+        opt->dm_cond = (double *)malloc(sizeof(double) * len);
+        memcpy(opt->dm_cond, dm_cond, sizeof(double) * len);
 }
 
 

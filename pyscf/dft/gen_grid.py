@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -164,7 +164,7 @@ def nwchem_prune(nuc, rads, n_ang, radii=radi.BRAGG_RADII):
     angs = leb_ngrid[angs]
     return angs
 
-# Prune scheme JCP 102, 346
+# Prune scheme JCP 102, 346 (1995); DOI:10.1063/1.469408
 def treutler_prune(nuc, rads, n_ang, radii=None):
     '''Treutler-Ahlrichs
 
@@ -196,7 +196,7 @@ def treutler_prune(nuc, rads, n_ang, radii=None):
 
 # Stratmann, Scuseria, Frisch. CPL, 257, 213 (1996), eq.11
 def stratmann(g):
-    '''Stratmann, Scuseria, Frisch. CPL, 257, 213 (1996)'''
+    '''Stratmann, Scuseria, Frisch. CPL, 257, 213 (1996); DOI:10.1016/0009-2614(96)00600-8'''
     a = .64  # for eq. 14
     g = numpy.asarray(g)
     ma = g/a
@@ -207,7 +207,7 @@ def stratmann(g):
     return g1
 
 def original_becke(g):
-    '''Becke, JCP, 88, 2547 (1988)'''
+    '''Becke, JCP 88, 2547 (1988); DOI:10.1063/1.454033'''
 #    This funciton has been optimized in the C code VXCgen_grid
 #    g = (3 - g**2) * g * .5
 #    g = (3 - g**2) * g * .5
@@ -388,8 +388,15 @@ class Grids(lib.StreamObject):
     '''DFT mesh grids
 
     Attributes for Grids:
-        level : int (0 - 9)
-            big number for large mesh grids, default is 3
+        level : int
+            To control the number of radial and angular grids. Large number
+            leads to large mesh grids. The default level 3 corresponds to
+            (50,302) for H, He;
+            (75,302) for second row;
+            (80~105,434) for rest.
+
+            Grids settings at other levels can be found in
+            pyscf.dft.gen_grid.RAD_GRIDS and pyscf.dft.gen_grid.ANG_ORDER
 
         atomic_radii : 1D array
             | radi.BRAGG_RADII  (default)
@@ -428,13 +435,6 @@ class Grids(lib.StreamObject):
             Set (radial, angular) grids for particular atoms.
             Eg, grids.atom_grid = {'H': (20,110)} will generate 20 radial
             grids and 110 angular grids for H atom.
-
-        level : int
-            To control the number of radial and angular grids.  The default
-            level 3 corresponds to
-            (50,302) for H, He;
-            (75,302) for second row;
-            (80~105,434) for rest.
 
         Examples:
 
@@ -500,12 +500,10 @@ class Grids(lib.StreamObject):
     def __setattr__(self, key, val):
         if key in ('atom_grid', 'atomic_radii', 'radii_adjust', 'radi_method',
                    'becke_scheme', 'prune', 'level'):
-            self.coords = None
-            self.weights = None
-            self.non0tab = None
+            self.reset()
         super(Grids, self).__setattr__(key, val)
 
-    def dump_flags(self):
+    def dump_flags(self, verbose=None):
         logger.info(self, 'radial grids: %s', self.radi_method.__doc__)
         logger.info(self, 'becke partition: %s', self.becke_scheme.__doc__)
         logger.info(self, 'pruning grids: %s', self.prune)
@@ -541,6 +539,15 @@ class Grids(lib.StreamObject):
         self.dump_flags()
         return self.build(mol, with_non0tab)
 
+    def reset(self, mol=None):
+        '''Reset mol and clean up relevant attributes for scanner mode'''
+        if mol is not None:
+            self.mol = mol
+        self.coords = None
+        self.weights = None
+        self.non0tab = None
+        return self
+
     @lib.with_doc(gen_atomic_grids.__doc__)
     def gen_atomic_grids(self, mol, atom_grid=None, radi_method=None,
                          level=None, prune=None, **kwargs):
@@ -567,44 +574,40 @@ class Grids(lib.StreamObject):
         return make_mask(mol, coords, relativity, shls_slice, verbose)
 
 
-_default_rad = getattr(__config__, 'dft_gen_grid_Grids_default_rad', None)
-if _default_rad is None:
-    def _default_rad(nuc, level=3):
-        '''Number of radial grids '''
-        tab   = numpy.array( (2 , 10, 18, 36, 54, 86, 118))
-        #           Period    1   2   3   4   5   6   7         # level
-        grids = numpy.array((( 10, 15, 20, 30, 35, 40, 50),     # 0
-                             ( 30, 40, 50, 60, 65, 70, 75),     # 1
-                             ( 40, 60, 65, 75, 80, 85, 90),     # 2
-                             ( 50, 75, 80, 90, 95,100,105),     # 3
-                             ( 60, 90, 95,105,110,115,120),     # 4
-                             ( 70,105,110,120,125,130,135),     # 5
-                             ( 80,120,125,135,140,145,150),     # 6
-                             ( 90,135,140,150,155,160,165),     # 7
-                             (100,150,155,165,170,175,180),     # 8
-                             (200,200,200,200,200,200,200),))   # 9
-        period = (nuc > tab).sum()
-        return grids[level,period]
+def _default_rad(nuc, level=3):
+    '''Number of radial grids '''
+    tab   = numpy.array( (2 , 10, 18, 36, 54, 86, 118))
+    period = (nuc > tab).sum()
+    return RAD_GRIDS[level,period]
+#                Period    1   2   3   4   5   6   7        # level
+RAD_GRIDS = numpy.array((( 10, 15, 20, 30, 35, 40, 50),     # 0
+                         ( 30, 40, 50, 60, 65, 70, 75),     # 1
+                         ( 40, 60, 65, 75, 80, 85, 90),     # 2
+                         ( 50, 75, 80, 90, 95,100,105),     # 3
+                         ( 60, 90, 95,105,110,115,120),     # 4
+                         ( 70,105,110,120,125,130,135),     # 5
+                         ( 80,120,125,135,140,145,150),     # 6
+                         ( 90,135,140,150,155,160,165),     # 7
+                         (100,150,155,165,170,175,180),     # 8
+                         (200,200,200,200,200,200,200),))   # 9
 
-_default_ang = getattr(__config__, 'dft_gen_grid_Grids_default_ang', None)
-if _default_ang is None:
-    def _default_ang(nuc, level=3):
-        '''Order of angular grids. See LEBEDEV_ORDER for the mapping of
-        the order and the number of angular grids'''
-        tab   = numpy.array( (2 , 10, 18, 36, 54, 86, 118))
-        #           Period    1   2   3   4   5   6   7         # level
-        order = numpy.array(((11, 15, 17, 17, 17, 17, 17 ),     # 0
-                             (17, 23, 23, 23, 23, 23, 23 ),     # 1
-                             (23, 29, 29, 29, 29, 29, 29 ),     # 2
-                             (29, 29, 35, 35, 35, 35, 35 ),     # 3
-                             (35, 41, 41, 41, 41, 41, 41 ),     # 4
-                             (41, 47, 47, 47, 47, 47, 47 ),     # 5
-                             (47, 53, 53, 53, 53, 53, 53 ),     # 6
-                             (53, 59, 59, 59, 59, 59, 59 ),     # 7
-                             (59, 59, 59, 59, 59, 59, 59 ),     # 8
-                             (65, 65, 65, 65, 65, 65, 65 ),))   # 9
-        period = (nuc > tab).sum()
-        return LEBEDEV_ORDER[order[level,period]]
+def _default_ang(nuc, level=3):
+    '''Order of angular grids. See LEBEDEV_ORDER for the mapping of
+    the order and the number of angular grids'''
+    tab   = numpy.array( (2 , 10, 18, 36, 54, 86, 118))
+    period = (nuc > tab).sum()
+    return LEBEDEV_ORDER[ANG_ORDER[level,period]]
+#               Period    1   2   3   4   5   6   7         # level
+ANG_ORDER = numpy.array(((11, 15, 17, 17, 17, 17, 17 ),     # 0
+                         (17, 23, 23, 23, 23, 23, 23 ),     # 1
+                         (23, 29, 29, 29, 29, 29, 29 ),     # 2
+                         (29, 29, 35, 35, 35, 35, 35 ),     # 3
+                         (35, 41, 41, 41, 41, 41, 41 ),     # 4
+                         (41, 47, 47, 47, 47, 47, 47 ),     # 5
+                         (47, 53, 53, 53, 53, 53, 53 ),     # 6
+                         (53, 59, 59, 59, 59, 59, 59 ),     # 7
+                         (59, 59, 59, 59, 59, 59, 59 ),     # 8
+                         (65, 65, 65, 65, 65, 65, 65 ),))   # 9
 
 def prange(start, end, step):
     for i in range(start, end, step):
@@ -614,7 +617,6 @@ def prange(start, end, step):
 
 
 if __name__ == '__main__':
-    from pyscf import gto
     h2o = gto.Mole()
     h2o.verbose = 0
     h2o.output = None#"out_h2o"
@@ -623,10 +625,7 @@ if __name__ == '__main__':
         ['H' , (0. , -0.757 , 0.587)],
         ['H' , (0. , 0.757  , 0.587)] ]
     h2o.build()
-    import time
-    t0 = time.clock()
     g = Grids(h2o)
     g.build()
     print(g.coords.shape)
-    print(time.clock() - t0)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -109,9 +109,9 @@ def writeNEVPTIntegrals(mc, E1, E2, E1eff, aaavsplit, nfro, fully_ic=False, thir
     energyE0 = 1.0*numpy.einsum('ij,ij',     E1, eris_sp['h1eff'][ncor:nocc,ncor:nocc])\
              + 0.5*numpy.einsum('ijkl,ijkl', E2, eris['ppaa'][ncor:nocc,ncor:nocc,:,:].transpose(0,2,1,3))
     energyE0 += energy_core
-    energyE0 += mc.mol.energy_nuc()
+    energyE0 += mc.energy_nuc()
 
-    print("Energy_nuc  = %13.8f"%(mc.mol.energy_nuc()))
+    print("Energy_nuc  = %13.8f"%(mc.energy_nuc()))
     print("Energy_core = %13.8f"%(energy_core))
     print("Energy      = %13.8f"%(energyE0))
     print("")
@@ -261,6 +261,9 @@ def writeMRLCCIntegrals(mc, E1, E2, nfro, fully_ic=False, third_order=False):
     vhfcore  = reduce(numpy.dot, (mo.T, vj-vk*0.5, mo))
     int1     = reduce(numpy.dot, (mo.T, hcore    , mo))+vhfcore
     numpy.save(intfolder+"int1",   numpy.asfortranarray(int1[nfro:,nfro:]))
+    # energy_core_fro = numpy.einsum('ij,ji', dmcore, hcore) \
+    #                   + numpy.einsum('ij,ji', dmcore, vj-0.5*vk) * .5
+    # print("Energy_fro1 = %13.8f"%(energy_core_fro))
 
     # energy_core
     hcore  = mc.get_hcore()
@@ -273,9 +276,9 @@ def writeMRLCCIntegrals(mc, E1, E2, nfro, fully_ic=False, third_order=False):
     energyE0 = 1.0*numpy.einsum('ij,ij',     E1, eris_sp['h1eff'][ncor:nocc,ncor:nocc])\
              + 0.5*numpy.einsum('ijkl,ijkl', E2, eris['ppaa'][ncor:nocc,ncor:nocc,:,:].transpose(0,2,1,3))
     energyE0 += energy_core
-    energyE0 += mc.mol.energy_nuc()
+    energyE0 += mc.energy_nuc()
 
-    print("Energy_nuc  = %13.8f"%(mc.mol.energy_nuc()))
+    print("Energy_nuc  = %13.8f"%(mc.energy_nuc()))
     print("Energy_core = %13.8f"%(energy_core))
     print("Energy      = %13.8f"%(energyE0))
     print("")
@@ -301,10 +304,10 @@ def writeMRLCCIntegrals(mc, E1, E2, nfro, fully_ic=False, third_order=False):
     print("Basic ingredients written to "+intfolder)
     numpy.save(intfolder+"W:ccae", numpy.asfortranarray(eris['pcpc'][ncor:nocc,     :    , nocc:    ,     :    ].transpose(1,3,0,2)))
     numpy.save(intfolder+"W:eecc", numpy.asfortranarray(eris['pcpc'][nocc:    ,     :    , nocc:    ,     :    ].transpose(0,2,1,3)))
-    if (third_order):
-      numpy.save(intfolder+"W:ceec", numpy.asfortranarray(eris['pcpc'][nocc:    ,     :    , nocc:    ,     :    ].transpose(1,2,0,3)))
-      numpy.save(intfolder+"W:cccc", numpy.asfortranarray(eris['ppcc'][nfro:ncor, nfro:ncor,     :    ,     :    ].transpose(2,0,3,1)))
-      numpy.save(intfolder+"W:cece", numpy.asfortranarray(eris['ppcc'][nocc:    , nocc:    ,     :    ,     :    ].transpose(2,0,3,1)))
+    #
+    numpy.save(intfolder+"W:ceec", numpy.asfortranarray(eris['pcpc'][nocc:    ,     :    , nocc:    ,     :    ].transpose(1,2,0,3)))
+    numpy.save(intfolder+"W:cccc", numpy.asfortranarray(eris['ppcc'][nfro:ncor, nfro:ncor,     :    ,     :    ].transpose(2,0,3,1)))
+    numpy.save(intfolder+"W:cece", numpy.asfortranarray(eris['ppcc'][nocc:    , nocc:    ,     :    ,     :    ].transpose(2,0,3,1)))
     if (third_order):
       numpy.save(intfolder+"W:ccca", numpy.asfortranarray(eris['ppcc'][nfro:ncor, ncor:nocc,     :    ,     :    ].transpose(2,0,3,1)))
       numpy.save(intfolder+"W:ccce", numpy.asfortranarray(eris['ppcc'][nfro:ncor, nocc:    ,     :    ,     :    ].transpose(2,0,3,1)))
@@ -317,9 +320,9 @@ def writeMRLCCIntegrals(mc, E1, E2, nfro, fully_ic=False, third_order=False):
     numpy.save(intfolder+"W:aaaa", numpy.asfortranarray(eris['ppaa'][ncor:nocc, ncor:nocc,     :    ,     :    ].transpose(0,2,1,3)))
     numpy.save(intfolder+"W:eaca", numpy.asfortranarray(eris['ppaa'][nocc:    , nfro:ncor,     :    ,     :    ].transpose(0,2,1,3)))
     numpy.save(intfolder+"W:caca", numpy.asfortranarray(eris['ppaa'][nfro:ncor, nfro:ncor,     :    ,     :    ].transpose(0,2,1,3)))
-    if (third_order):
-      numpy.save(intfolder+"W:aeea", numpy.asfortranarray(eris['papa'][nocc:    ,     :    , nocc:    ,     :    ].transpose(1,2,0,3)))
-      numpy.save(intfolder+"W:aeae", numpy.asfortranarray(eris['ppaa'][nocc:    , nocc:    ,     :    ,     :    ].transpose(2,0,3,1)))
+    #
+    numpy.save(intfolder+"W:aeea", numpy.asfortranarray(eris['papa'][nocc:    ,     :    , nocc:    ,     :    ].transpose(1,2,0,3)))
+    numpy.save(intfolder+"W:aeae", numpy.asfortranarray(eris['ppaa'][nocc:    , nocc:    ,     :    ,     :    ].transpose(2,0,3,1)))
     if (fully_ic):
       numpy.save(intfolder+"W:eaaa", numpy.asfortranarray(eris['ppaa'][nocc:    , ncor:nocc,     :    ,     :    ].transpose(0,2,1,3)))
       numpy.save(intfolder+"W:caaa", numpy.asfortranarray(eris['ppaa'][nfro:ncor, ncor:nocc,     :    ,     :    ].transpose(0,2,1,3)))
@@ -409,12 +412,12 @@ def writeFCIDUMPs_NEVPT(mc,eris,eris_sp,aaavsplit,energy_core,energyE0,nfro):
     else:
         orbsymout = []
 
-    virtOrbs = range(nocc, eris_sp['h1eff'].shape[0])
-    chunks = len(virtOrbs)/aaavsplit
-    virtRange = [virtOrbs[i:i+chunks] for i in xrange(0, len(virtOrbs), chunks)]
+    virtOrbs = list(range(nocc, eris_sp['h1eff'].shape[0]))
+    chunks = len(virtOrbs) // aaavsplit
+    virtRange = [virtOrbs[i:i+chunks] for i in range(0, len(virtOrbs), chunks)]
 
     for K in range(aaavsplit):
-        currentOrbs = range(ncor, nocc)+virtRange[K]
+        currentOrbs = list(range(ncor, nocc)) + virtRange[K]
         fout = open('FCIDUMP_aaav%d'%(K),'w')
         #tools.fcidump.write_head(fout, eris_sp['h1eff'].shape[0]-ncor, mol.nelectron-2*ncor, orbsym= orbsymout[ncor:])
 
@@ -438,7 +441,7 @@ def writeFCIDUMPs_NEVPT(mc,eris,eris_sp,aaavsplit,energy_core,energyE0,nfro):
         tools.fcidump.write_hcore(fout, h1eff, nact+len(virtRange[K]), tol=1e-8)
         #tools.fcidump.write_hcore(fout,\
         #        eris_sp['h1eff'][virtRange[K][0]:virtRange[K][-1]+1, virtRange[K][0]:virtRange[K][-1]+1], len(virtRange[K]), tol=1e-8)
-        fout.write(' %17.9e  0  0  0  0\n' %( mol.energy_nuc()+energy_core-energyE0))
+        fout.write(' %17.9e  0  0  0  0\n' %( mc.energy_nuc()+energy_core-energyE0))
         fout.close()
         print("Wrote FCIDUMP_aaav%d file"%(K))
 
@@ -452,7 +455,7 @@ def writeFCIDUMPs_NEVPT(mc,eris,eris_sp,aaavsplit,energy_core,energyE0,nfro):
                         fout.write(' %17.9e %4d %4d %4d %4d\n' \
                                    % (eris['ppaa'][i,j,k-ncor,l-ncor], i+1-nfro, j+1-nfro, k+1-nfro, l+1-nfro))
 
-    dmrge = energyE0-mol.energy_nuc()-energy_core
+    dmrge = energyE0-mc.energy_nuc()-energy_core
 
     ecore_aaac = 0.0;
     for i in range(nfro,ncor):
@@ -507,13 +510,28 @@ def writeFCIDUMPs_MRLCC(mc,eris,eris_sp,int1,energy_core,energyE0,nfro):
                                        % (eris['papa'][i,l, j, k], i+1-ncor, l+1, k+1, j+1-ncor))
 
     tools.fcidump.write_hcore(fout, eris_sp['h1eff'][ncor:,ncor:], int1.shape[0]-ncor, tol=1e-8)
-    fout.write(' %17.9e  0  0  0  0\n' %( mol.energy_nuc()+energy_core-energyE0))
+    fout.write(' %17.9e  0  0  0  0\n' %( mc.energy_nuc()+energy_core-energyE0))
     fout.close()
     print("Wrote FCIDUMP_aaav0 file")
 
     eri1cas = ao2mo.outcore.general_iofree(mol, (mo[:,nfro:nocc], mo[:,nfro:nocc], mo[:,nfro:nocc], mo[:,nfro:nocc]), compact=True)
-    tools.fcidump.from_integrals("FCIDUMP_aaac", int1[nfro:nocc,nfro:nocc], eri1cas,\
-            nocc-nfro, mol.nelectron-2*nfro, nuc=mol.energy_nuc()-energyE0, orbsym = orbsymout[nfro:nocc], tol=1e-8)
+    core_only_1e = numpy.einsum('ii', int1[nfro:ncor, nfro:ncor])*2.0
+    core_only_2e = 2.0 * numpy.einsum('iijj', eris['ppcc'][nfro:ncor,
+                                                           nfro:ncor,
+                                                           :ncor-nfro,
+                                                           :ncor-nfro]) \
+                       - numpy.einsum('ijij', eris['pcpc'][nfro:ncor,
+                                                           :ncor-nfro,
+                                                           nfro:ncor,
+                                                           :ncor-nfro])
+    energy_fro = energy_core - core_only_1e - core_only_2e
+    # print("Energy_fro2 = %13.8f"%(energy_fro))
+    # print("E_nuc_aaac  = %13.8f"%(mc.energy_nuc() + energy_fro - energyE0))
+    tools.fcidump.from_integrals("FCIDUMP_aaac", int1[nfro:nocc,nfro:nocc],
+                                 eri1cas, nocc-nfro, mol.nelectron-2*nfro,
+                                 nuc=mc.energy_nuc() + energy_fro - energyE0,
+                                 orbsym=orbsymout[nfro:nocc], tol=1e-8,
+                                 float_format=' %17.9e')
     print("Wrote FCIDUMP_aaac  file")
     print("")
 
@@ -578,7 +596,7 @@ def writeNEVPTIntegralsLEGACY(mc, E1, E2, E1eff, aaavsplit, nfro):
     vj, vk = mc._scf.get_jk(mc.mol, dmcore)
     energyE0 += numpy.einsum('ij,ji', dmcore, mc.get_hcore()) \
                   + numpy.einsum('ij,ji', dmcore, vj-0.5*vk) * .5
-    energyE0 += mc.mol.energy_nuc()
+    energyE0 += mc.energy_nuc()
     print("Energy = ", energyE0)
 
     dmcore = numpy.dot(mo[:,:ncor], mo[:,:ncor].T)*2
@@ -663,7 +681,7 @@ def writeMRLCCIntegralsLEGACY(mc, E1, E2, nfro):
                     energyE0 += 0.5*E2[i,k,j,l] * int2ppoo[i+ncor, j+ncor, k+ncor, l+ncor]
 
     energyE0 += energy_core
-    energyE0 += mc.mol.energy_nuc()
+    energyE0 += mc.energy_nuc()
     print("Energy = ", energyE0)
 
     # Write "FCIDUMP_aaav0" and "FCIDUMP_aaac"
@@ -673,10 +691,9 @@ def writeMRLCCIntegralsLEGACY(mc, E1, E2, nfro):
 
     return energyE0, norb
 
-
-def execute(nelec, ncor, ncas, nfro, ms2, type,\
-                naux=0, memory=10,\
-                fully_ic=False, third_order=False, cumulantE4=False, df=False, no_handcoded_E3=False):
+def write_ic_inputs(nelec, ncor, ncas, nfro, ms2, type, naux=0, memory=10,
+                    fully_ic=False, third_order=False, cumulantE4=False,
+                    df=False, no_handcoded_E3=False):
     methods = ['_CCVV', '_CCAV', '_ACVV', '_CCAA', '_AAVV', '_CAAV']
     domains = ['eecc','ccae','eeca','ccaa','eeaa','caae']
     if (fully_ic):
@@ -688,10 +705,6 @@ def execute(nelec, ncor, ncas, nfro, ms2, type,\
     if (third_order):
         methods+=['3']
 
-    # For each method
-    totalE = 0.0
-    print("--ICPT executable:%s\n"%(executable))
-    print("Second-order:")
     for method in methods:
         # Prepare Input
         f = open("%s.inp"%(type+method), 'w')
@@ -723,7 +736,40 @@ def execute(nelec, ncor, ncas, nfro, ms2, type,\
         if (no_handcoded_E3 and not df):
           f.write('handcodedE3 0\n')
         f.close();
+    sys.stdout.flush()
 
+def write_uc_inputs(mc, reorder,fciExtraLine,root,norb, nfro=0, totalE=0,
+                   type="MRLCC", AAAVsplit=1, PTM=1000):
+    for k in range(AAAVsplit):
+      writeAAAConfFile(mc.nelecas[0], mc.nelecas[1], mc.ncore,        mc.ncas,  norb,\
+                       mc.fcisolver, PTM, "AAAV", mc.fcisolver.memory,\
+                       mc.fcisolver.num_thrds, reorder, fciExtraLine,\
+                       root=root, name = type,\
+                       aaavsplit=AAAVsplit, aaavIter=k)
+    writeAAAConfFile(  mc.nelecas[0], mc.nelecas[1], mc.ncore-nfro, mc.ncas,  norb-nfro,\
+                       mc.fcisolver, PTM, "AAAC", mc.fcisolver.memory,\
+                       mc.fcisolver.num_thrds, reorder, fciExtraLine,\
+                       root=root, name=type)
+    sys.stdout.flush()
+
+
+def executeIC(nelec, ncor, ncas, nfro, type, fully_ic=False, third_order=False):
+    methods = ['_CCVV', '_CCAV', '_ACVV', '_CCAA', '_AAVV', '_CAAV']
+    domains = ['eecc','ccae','eeca','ccaa','eeaa','caae']
+    if (fully_ic):
+        methods+=['_AAAV', '_AAAC']
+        domains+=['eaaa','caaa']
+    if (ncor - nfro) == 0:
+        methods = ['_AAVV']
+        domains = ['eeaa']
+    if (third_order):
+        methods+=['3']
+
+    # For each method
+    totalE = 0.0
+    print("--ICPT executable:%s\n"%(executable))
+    print("Second-order:")
+    for method in methods:
         # Run icpt
         from subprocess import check_call,CalledProcessError
         infile="%s.inp"%(type+method)
@@ -764,24 +810,7 @@ def execute(nelec, ncor, ncas, nfro, ms2, type,\
       return 0.0
 
 
-def executeUC(mc, reorder,fciExtraLine,root,norb,\
-                  nfro=0,\
-                  totalE=0,\
-                  type="MRLCC",\
-                  AAAVsplit=0,\
-                  PTM=1000):
-    for k in range(AAAVsplit):
-      writeAAAConfFile(mc.nelecas[0], mc.nelecas[1], mc.ncore,        mc.ncas,  norb,\
-                       mc.fcisolver, PTM, "AAAV", mc.fcisolver.memory,\
-                       mc.fcisolver.num_thrds, reorder, fciExtraLine,\
-                       root=root, name = type,\
-                       aaavsplit=AAAVsplit, aaavIter=k)
-    writeAAAConfFile(  mc.nelecas[0], mc.nelecas[1], mc.ncore-nfro, mc.ncas,  norb-nfro,\
-                       mc.fcisolver, PTM, "AAAC", mc.fcisolver.memory,\
-                       mc.fcisolver.num_thrds, reorder, fciExtraLine,\
-                       root=root, name=type)
-    sys.stdout.flush()
-
+def executeUC(mc, nfro=0, totalE=0, type="MRLCC", AAAVsplit=1):
     from subprocess import check_call
     import struct
     try:
@@ -792,7 +821,7 @@ def executeUC(mc, reorder,fciExtraLine,root,norb,\
         energy = struct.unpack('d', file1.read(8))[0]
         file1.close()
         totalE += energy
-        print("perturber AAAV%i --  %18.9f"%(k,energy))
+        print("perturber AAAV%i -- %18.9f"%(k,energy))
     except ValueError:
         print("perturber AAAV -- NA")
 
@@ -808,7 +837,7 @@ def executeUC(mc, reorder,fciExtraLine,root,norb,\
     except ValueError:
         print("perturber AAAC -- NA")
     print("")
-    print("Total:             %18.9f"%(totalE))
+    print("Total uncontr.:    %18.9f"%(totalE))
     print("")
     return totalE
 
@@ -834,9 +863,9 @@ def ReadWriteEnergy(outfile,method):
 def writeAAAConfFile(neleca, nelecb, ncor, ncas, norb,\
         DMRGCI, maxM, perturber, memory, numthrds,\
         reorder, extraline, root=0, approx= False, aaavsplit=1, aaavIter=0, name= "MRLCC"):
-    virtOrbs = range(norb-ncor-ncas)
-    chunks = len(virtOrbs)/aaavsplit
-    virtRange = [virtOrbs[i:i+chunks] for i in xrange(0, len(virtOrbs), chunks)]
+    virtOrbs = list(range(norb - ncor - ncas))
+    chunks = len(virtOrbs) // aaavsplit
+    virtRange = [virtOrbs[i:i+chunks] for i in range(0, len(virtOrbs), chunks)]
 
     if (perturber == "AAAC"):
         configFile = "response%s_aaac.conf"%(name)
@@ -872,9 +901,10 @@ def writeAAAConfFile(neleca, nelecb, ncor, ncas, norb,\
     f.write('schedule\n')
     if (maxM <= DMRGCI.maxM):
         maxM = DMRGCI.maxM+1
+    step = max(1000, (maxM-DMRGCI.maxM)//4)
 
     iter = 0
-    for M in range(DMRGCI.maxM, maxM, 1000):
+    for M in range(DMRGCI.maxM, maxM, step):
         f.write('%6i  %6i  %8.4e  %8.4e \n' %(iter*4, M, 1e-6, 1.0e-5))
         iter += 1
 
@@ -895,7 +925,7 @@ def writeAAAConfFile(neleca, nelecb, ncor, ncas, norb,\
         integralFile = "FCIDUMP_aaac"
     f.write('orbitals %s\n' % integralFile)
 
-    f.write('maxiter %i\n'%(4*iter+4))
+    f.write('maxiter %i\n'%(4*iter+8))
     f.write('sweep_tol %8.4e\n'%DMRGCI.tol)
 
     f.write('outputlevel %s\n'%DMRGCI.outputlevel)
@@ -1024,7 +1054,7 @@ def trans_e1_outcore(mc, mo, max_memory=None, ioblk_size=256, tmpdir=None,
     time1 = [time.clock(), time.time()]
     ao_loc = numpy.array(mol.ao_loc_nr(), dtype=numpy.int32)
     cvcvfile = tempfile.NamedTemporaryFile(dir=tmpdir)
-    with h5py.File(cvcvfile.name) as f5:
+    with h5py.File(cvcvfile.name, 'r') as f5:
         cvcv = f5.create_dataset('eri_mo', (ncor*nvir,ncor*nvir), 'f8')
         ppaa, papa, pacv = _trans(mo, ncor, ncas, load_buf, cvcv, ao_loc)[:3]
     time0 = logger.timer(mol, 'trans_cvcv', *time0)
@@ -1098,7 +1128,10 @@ def nevpt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore=F
 
 def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore=False, fciExtraLine=[],\
             have3RDM=False, root=0, nroots=1, verbose=None, AAAVsplit=1,\
-            do_dm3=True, do_dm4=False, fully_ic=False, third_order=False, cumulantE4=False, no_handcoded_E3=False, filetype="binary", legacy=False):
+            do_dm3=True, do_dm4=False, fully_ic=False, third_order=False, cumulantE4=False, no_handcoded_E3=False, filetype="binary", restart=None, legacy=False):
+    import os
+    from subprocess import check_call
+
     sys.stdout.flush()
     print("")
     print("")
@@ -1133,10 +1166,12 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
       print("AAAVsplit only works with CASSCF natural orbitals and NEVPT")
       print("")
       exit(0)
-    if (hasattr(mc,'with_df')):
+    if (getattr(mc, 'with_df', None)):
       df=True
     else:
       df=False
+    if (restart==None):
+        restart = have3RDM      # if we have 3RDM, we also have MPS-WF and want to use it
     #if (fully_ic and not (do_dm4 or cumulantE4)):
     #  print("WARNING: Fully IC needs do_dm4 or cumulantE4!")
     #  print("")
@@ -1165,17 +1200,19 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
     # =========================================
     # INITIATIONS
     # =========================================
-    # Remove the -1 state
-    import os
-    os.system("rm -f %s/node0/Rotation*.state-1.tmp"%(mc.fcisolver.scratchDirectory))
-    os.system("rm -f %s/node0/wave*.-1.tmp"         %(mc.fcisolver.scratchDirectory))
-    os.system("rm -f %s/node0/RestartReorder.dat_1" %(mc.fcisolver.scratchDirectory))
+    if restart == False:        # Remove the -1 state
+        os.system("rm -f %s/node0/Rotation*.state-1.tmp"%(mc.fcisolver.scratchDirectory))
+        os.system("rm -f %s/node0/wave*.-1.tmp"         %(mc.fcisolver.scratchDirectory))
+        os.system("rm -f %s/node0/RestartReorder.dat_1" %(mc.fcisolver.scratchDirectory))
+    else:                       # Check beforehand if RestartReorder is there
+        assert os.path.isfile("%s/node0/RestartReorder.dat" %(mc.fcisolver.scratchDirectory)) \
+            or os.path.isfile("%s/node0/RestartReorder.dat_1" %(mc.fcisolver.scratchDirectory))
 
     # FCIsolver initiation
     mc.fcisolver.startM = 100
     mc.fcisolver.maxM = max(rdmM,501)
     mc.fcisolver.clearSchedule()
-    mc.fcisolver.restart = False
+    mc.fcisolver.restart = restart
     mc.fcisolver.generate_schedule()
     mc.fcisolver.extraline = []
     if (PTincore):
@@ -1187,7 +1224,6 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
       mc.fcisolver.has_threepdm = True
 
     # Prepare directory
-    import os
     intfolder=mc.fcisolver.scratchDirectory+'/int/'
     os.system("mkdir -p "+intfolder)
     if intfolder!='int/':
@@ -1208,7 +1244,7 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
         stateIter = range(nroots)
         stateIter.remove(root)
         for istate in stateIter:
-            dm3 = mc.fcisolver.make_rdm3(state=istate, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision)
+            dm3 = mc.fcisolver.make_rdm3(state=istate, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, restart=restart)
             # This is coherent with statement about indexes made in "make_rdm3"
             # This is done with SQA in mind.
             dm2 = numpy.einsum('ijklmk', dm3)/(nelec-2)
@@ -1217,7 +1253,7 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
 
     # RDM4 and RDM3
     if (do_dm4):
-      dm4 = mc.fcisolver.make_rdm4(state=root, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, filetype=filetype)
+      dm4 = mc.fcisolver.make_rdm4(state=root, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, filetype=filetype, restart=restart)
       # This is coherent with statement about indexes made in "make_rdm4"
       # This is done with SQA in mind
       if (nelec>3):
@@ -1226,7 +1262,7 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
         dm3 = mc.fcisolver.make_rdm3(state=root, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, filetype=filetype)
       numpy.save(intfolder+"E4",dm4)
     elif (do_dm3):
-      dm3 = mc.fcisolver.make_rdm3(state=root, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, filetype=filetype)
+      dm3 = mc.fcisolver.make_rdm3(state=root, norb=mc.ncas, nelec=mc.nelecas, dt=float_precision, filetype=filetype, restart=restart)
 
     # RDM2 and RDM1
     # This is coherent with statement about indexes made in "make_rdm4" and "make_rdm3"
@@ -1281,26 +1317,24 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
     sys.stdout.flush()
 
     # =========================================
-    # BACKUP FILE TO -1
+    # BACKUP RestartReorder.dat FILE TO _1
     # =========================================
-    #backup the restartreorder file to -1. this is because responseaaav and responseaaac both overwrite this file
+    #backup the restartreorder file to _1. this is because responseaaav and responseaaac both overwrite this file
     #this means that when we want to restart a calculation after lets say responseaaav didnt finish, the new calculaitons
     #will use the restartreorder file that was written by the incomplete responseaaav run instead of the original dmrg run.
     reorder=[]
-    reorderf1 = "%s/node0/RestartReorder.dat_1"%(mc.fcisolver.scratchDirectory)
+    reorder_bak_f = "%s/node0/RestartReorder.dat_1"%(mc.fcisolver.scratchDirectory)
     reorderf = "%s/node0/RestartReorder.dat"%(mc.fcisolver.scratchDirectory)
-    import os.path
-    reorder1present = os.path.isfile(reorderf1)
-    if (reorder1present):
-        from subprocess import check_call
-        if os.path.isfile(reorderf1):
-          check_call("cp %s %s"%(reorderf1, reorderf), shell=True)
+    reorder_bak_present = os.path.isfile(reorder_bak_f)
+    if (reorder_bak_present):
+        print("Found and use RestartReorder.dat_1")
+        check_call("cp -p %s %s"%(reorder_bak_f, reorderf), shell=True)
+        reorder = numpy.loadtxt(reorder_bak_f)
     else :
-        from subprocess import check_call
-        if os.path.isfile(reorderf):
-          check_call("cp %s %s"%(reorderf, reorderf1), shell=True)
-    if os.path.isfile(reorderf):
-      reorder = numpy.loadtxt(reorderf)
+        assert os.path.isfile(reorderf)
+        reorder = numpy.loadtxt(reorderf)
+        check_call("cp -p %s %s"%(reorderf, reorder_bak_f), shell=True)
+    assert len(reorder) == mc.ncas
 
     # =========================================
     # NEVPT
@@ -1317,15 +1351,20 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
           norb, energyE0 = writeNEVPTIntegrals(mc, dm1, dm2, dm1eff, AAAVsplit, nfro, fully_ic=fully_ic, third_order=third_order)
         sys.stdout.flush()
 
-        totalE = 0.0;
-        totalE += execute(nelec, mc.ncore, mc.ncas, nfro, mc.mol.spin, 'NEVPT2',\
-                          naux=naux, memory=mc.fcisolver.memory,\
-                          fully_ic=fully_ic, third_order=third_order,\
-                          cumulantE4=cumulantE4, df=df, no_handcoded_E3=no_handcoded_E3)
+        mc_spin = mc.nelecas[0]-mc.nelecas[1]
+        write_ic_inputs(nelec, mc.ncore, mc.ncas, nfro, mc_spin, 'NEVPT2',
+                        naux=naux, memory=mc.fcisolver.memory,
+                        fully_ic=fully_ic, third_order=third_order,
+                        cumulantE4=cumulantE4, df=df,
+                        no_handcoded_E3=no_handcoded_E3)
         if (not fully_ic):
-          totalE +=  executeUC(mc,reorder,fciExtraLine,root,norb,\
-                               type="NEVPT2",\
-                               AAAVsplit=1)
+            write_uc_inputs(mc, reorder, fciExtraLine, root, norb, nfro=nfro,
+                            type="NEVPT2", AAAVsplit=AAAVsplit, PTM=PTM)
+        totalE = 0.0;
+        totalE += executeIC(nelec, mc.ncore, mc.ncas, nfro, 'NEVPT2',
+                            fully_ic=fully_ic, third_order=third_order)
+        if (not fully_ic):
+            totalE += executeUC(mc, nfro=nfro, type="NEVPT2", AAAVsplit=AAAVsplit)
         print("Total PT       --  %18.9f"%(totalE))
         print("Total energy   --  %18.9f"%(totalE+energyE0))
         print("")
@@ -1351,15 +1390,20 @@ def icmpspt(mc, pttype="NEVPT", energyE0=0.0, rdmM=0, nfro=0, PTM=1000, PTincore
           energyE0, norb = writeMRLCCIntegrals(mc, dm1, dm2, nfro, fully_ic=fully_ic, third_order=third_order)
         sys.stdout.flush()
 
-        totalE = 0.0
-        totalE +=  execute(nelec, mc.ncore, mc.ncas, nfro, mc.mol.spin,'MRLCC',\
-                           naux=naux, memory=mc.fcisolver.memory,\
-                           fully_ic=fully_ic, third_order=third_order,\
-                           cumulantE4=cumulantE4, df=df, no_handcoded_E3=no_handcoded_E3)
+        mc_spin = mc.nelecas[0]-mc.nelecas[1]
+        write_ic_inputs(nelec, mc.ncore, mc.ncas, nfro, mc_spin, 'MRLCC',
+                        naux=naux, memory=mc.fcisolver.memory,
+                        fully_ic=fully_ic, third_order=third_order,
+                        cumulantE4=cumulantE4, df=df,
+                        no_handcoded_E3=no_handcoded_E3)
         if (not fully_ic):
-          totalE +=  executeUC(mc,reorder,fciExtraLine,root,norb,\
-                               type="MRLCC",\
-                               AAAVsplit=0)
+            write_uc_inputs(mc, reorder, fciExtraLine, root, norb, nfro=nfro,
+                            type="MRLCC", AAAVsplit=1, PTM=PTM)
+        totalE = 0.0
+        totalE += executeIC(nelec, mc.ncore, mc.ncas, nfro, 'MRLCC',
+                            fully_ic=fully_ic, third_order=third_order)
+        if (not fully_ic):
+            totalE += executeUC(mc, nfro=nfro, type="MRLCC", AAAVsplit=1)
 
         print("Total PT       --  %18.9f"%(totalE))
         print("Total energy   --  %18.9f"%(totalE+energyE0))

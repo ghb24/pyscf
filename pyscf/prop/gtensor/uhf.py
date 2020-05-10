@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@
 Non-relativistic unrestricted Hartree-Fock g-tensor
 
 Refs:
-    JPC, 101, 3388
-    JCP, 115, 11080
-    JCP, 119, 10489
+    JPCA 101, 3388 (1997); DOI:10.1021/jp963060t
+    JCP 115, 11080 (2001); DOI:10.1063/1.1419058
+    JCP 119, 10489 (2003); DOI:10.1063/1.1620497
 Note g-tensor = 1/muB d^2 E/ dB dS
 In some literature, muB is not explicitly presented in the perturbation formula.
 '''
@@ -251,7 +251,7 @@ def make_para_soc2e(gobj, dm0, dm10, sso_qed_fac=1):
         if with_soo:
             ej = numpy.einsum('yij,xji->xy', vj[0]-vj[1], dm10a+dm10b)
             gpara2e -= 2 * (ej - ek)
-    else:  # SOMF, see JCP 122, 034107 Eq (19)
+    else:  # SOMF, see JCP 122, 034107 (2005); DOI:10.1063/1.1829047 Eq (19)
         ej = numpy.einsum('yij,xji->xy', vj[0]+vj[1], dm10a-dm10b)
         ek = numpy.einsum('yil,xli->xy', vk[0]+vk[1], dm10a-dm10b)
         gpara2e -= ej - 1.5 * ek
@@ -300,7 +300,7 @@ def make_h01_soc1e(gobj, mo_coeff, mo_occ, qed_fac=1):
     #qed_fac = (nist.G_ELECTRON - 1)
 
 # hso1e is the imaginary part of [i sigma dot pV x p]
-# JCP, 122, 034107 Eq (2) = 1/4c^2 hso1e
+# JCP 122, 034107 (2005); DOI:10.1063/1.1829047 Eq (2) = 1/4c^2 hso1e
     if gobj.so_eff_charge:
         hso1e = 0
         for ia in range(mol.natm):
@@ -333,7 +333,6 @@ def get_jk_amfi(mol, dm0):
     atom = copy.copy(mol)
     aoslice = mol.aoslice_by_atom(ao_loc)
     for ia in range(mol.natm):
-        symb = mol.atom_symbol(ia)
         b0, b1, p0, p1 = aoslice[ia]
         atom._bas = mol._bas[b0:b1]
         vj1, vk1 = get_jk(atom, (dma[p0:p1,p0:p1],dmb[p0:p1,p0:p1]))
@@ -356,7 +355,7 @@ def get_j_amfi(mol, dm0):
 
 
 # hso2e is the imaginary part of SSO
-# SSO term of JCP, 122, 034107 Eq (3) = 1/4c^2 hso2e
+# SSO term of JCP 122, 034107 (2005); DOI:10.1063/1.1829047 Eq (3) = 1/4c^2 hso2e
 def make_h01_soc2e(gobj, mo_coeff, mo_occ, sso_qed_fac=1):
     mol = gobj.mol
     alpha2 = nist.ALPHA ** 2
@@ -407,7 +406,7 @@ def _write(gobj, gtensor, title):
         gobj.stdout.write('sqrt(ggT) %s\n' % w)
 
 
-class GTensor(uhf_nmr.NMR):
+class GTensor(lib.StreamObject):
     '''dE = B dot gtensor dot s
 
     Attributes:
@@ -424,7 +423,13 @@ class GTensor(uhf_nmr.NMR):
             Whether to use Koseki effective SOC charge in 1-electron
             diamagnetic term and paramagnetic term.  Default is False.
     '''
-    def __init__(self, scf_method):
+    def __init__(self, mf):
+        self.mol = mf.mol
+        self.verbose = mf.mol.verbose
+        self.stdout = mf.mol.stdout
+        self.chkfile = mf.chkfile
+        self._scf = mf
+
         # dia_soc2e is 2-electron spin-orbit coupling for diamagnetic term
         # dia_soc2e can be 'SSO', 'SOO', 'SSO+SOO', None/False, True (='SSO+SOO')
         self.dia_soc2e = False
@@ -435,13 +440,24 @@ class GTensor(uhf_nmr.NMR):
         self.para_soc2e = 'SSO+SOO'
         # Koseki effective SOC charge
         self.so_eff_charge = False
-        self.mb = False   # corresponding to RMB basis (DO NOT use, in testing)
-        uhf_nmr.NMR.__init__(self, scf_method)
 
-    def dump_flags(self):
-        log = logger.Logger(self.stdout, self.verbose)
+        # corresponding to RMB basis (DO NOT use. It's in testing)
+        self.mb = False
+
+# gauge_orig=None will call GIAO. A coordinate array leads to common gauge
+        self.gauge_orig = None
+        self.cphf = True
+        self.max_cycle_cphf = 20
+        self.conv_tol = 1e-9
+
+        self.mo10 = None
+        self.mo_e10 = None
+        self._keys = set(self.__dict__.keys())
+
+    def dump_flags(self, verbose=None):
+        log = logger.new_logger(self, verbose)
         log.info('\n')
-        log.info('******** %s for %s ********',
+        log.info('******** %s for %s (In testing) ********',
                  self.__class__, self._scf.__class__)
         if self.gauge_orig is None:
             log.info('gauge = GIAO')
@@ -451,10 +467,10 @@ class GTensor(uhf_nmr.NMR):
         if self.cphf:
             log.info('CPHF conv_tol = %g', self.conv_tol)
             log.info('CPHF max_cycle_cphf = %d', self.max_cycle_cphf)
-        logger.info(self, 'dia_soc2e = %s', self.dia_soc2e)
-        logger.info(self, 'para_soc2e = %s', self.para_soc2e)
-        logger.info(self, 'so_eff_charge = %s (1e SO effective charge)',
-                    self.so_eff_charge)
+        log.info('dia_soc2e = %s', self.dia_soc2e)
+        log.info('para_soc2e = %s', self.para_soc2e)
+        log.info('so_eff_charge = %s (1e SO effective charge)',
+                 self.so_eff_charge)
         return self
 
     def kernel(self, mo1=None):
@@ -496,6 +512,13 @@ class GTensor(uhf_nmr.NMR):
 
     make_dia_gc2e = make_dia_gc2e
     make_para_soc2e = make_para_soc2e
+    solve_mo1 = uhf_nmr.solve_mo1
+    get_fock = uhf_nmr.get_fock
+
+    def get_ovlp(self, mol=None, gauge_orig=None):
+        if mol is None: mol = self.mol
+        if gauge_orig is None: gauge_orig = self.gauge_orig
+        return rhf_nmr.get_ovlp(mol, gauge_orig)
 
     def align(self, gtensor):
         return align(gtensor)

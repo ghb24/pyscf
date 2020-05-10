@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # limitations under the License.
 #
 # Author: Timothy Berkelbach <tim.berkelbach@gmail.com>
+#         Qiming Sun <osirpt.sun@gmail.com>
 #
 
 '''
@@ -28,9 +29,9 @@ from pyscf import lib
 from pyscf import ao2mo
 from pyscf.lib import logger
 from pyscf.cc import ccsd
-from pyscf.cc import rccsd
 from pyscf.ao2mo import _ao2mo
 from pyscf.mp import ump2
+from pyscf import scf
 from pyscf import __config__
 
 MEMORYMIN = getattr(__config__, 'cc_ccsd_memorymin', 2000)
@@ -43,13 +44,12 @@ def update_amps(cc, t1, t2, eris):
     t1a, t1b = t1
     t2aa, t2ab, t2bb = t2
     nocca, noccb, nvira, nvirb = t2ab.shape
-
-    fooa = eris.focka[:nocca,:nocca]
-    foob = eris.fockb[:noccb,:noccb]
+    mo_ea_o = eris.mo_energy[0][:nocca]
+    mo_ea_v = eris.mo_energy[0][nocca:] + cc.level_shift
+    mo_eb_o = eris.mo_energy[1][:noccb]
+    mo_eb_v = eris.mo_energy[1][noccb:] + cc.level_shift
     fova = eris.focka[:nocca,nocca:]
     fovb = eris.fockb[:noccb,noccb:]
-    fvva = eris.focka[nocca:,nocca:]
-    fvvb = eris.fockb[noccb:,noccb:]
 
     u1a = np.zeros_like(t1a)
     u1b = np.zeros_like(t1b)
@@ -68,10 +68,10 @@ def update_amps(cc, t1, t2, eris):
     Foob =  .5 * lib.einsum('me,ie->mi', fovb, t1b)
     Fvva = -.5 * lib.einsum('me,ma->ae', fova, t1a)
     Fvvb = -.5 * lib.einsum('me,ma->ae', fovb, t1b)
-    Fooa += fooa - np.diag(np.diag(fooa))
-    Foob += foob - np.diag(np.diag(foob))
-    Fvva += fvva - np.diag(np.diag(fvva))
-    Fvvb += fvvb - np.diag(np.diag(fvvb))
+    Fooa += eris.focka[:nocca,:nocca] - np.diag(mo_ea_o)
+    Foob += eris.fockb[:noccb,:noccb] - np.diag(mo_eb_o)
+    Fvva += eris.focka[nocca:,nocca:] - np.diag(mo_ea_v)
+    Fvvb += eris.fockb[noccb:,noccb:] - np.diag(mo_eb_v)
     dtype = u2aa.dtype
     wovvo = np.zeros((nocca,nvira,nvira,nocca), dtype=dtype)
     wOVVO = np.zeros((noccb,nvirb,nvirb,noccb), dtype=dtype)
@@ -81,7 +81,7 @@ def update_amps(cc, t1, t2, eris):
     wOvvO = np.zeros((noccb,nvira,nvira,noccb), dtype=dtype)
 
     mem_now = lib.current_memory()[0]
-    max_memory = max(0, cc.max_memory - mem_now)
+    max_memory = max(0, cc.max_memory - mem_now - u2aa.size*8e-6)
     if nvira > 0 and nocca > 0:
         blksize = max(ccsd.BLKMIN, int(max_memory*1e6/8/(nvira**3*3+1)))
         for p0,p1 in lib.prange(0, nocca, blksize):
@@ -158,7 +158,7 @@ def update_amps(cc, t1, t2, eris):
     woVvO += 0.5*lib.einsum('nJfB,menf->mBeJ', t2ab, ovov)
     tmpaa = lib.einsum('jf,menf->mnej', t1a, ovov)
     wovvo -= lib.einsum('nb,mnej->mbej', t1a, tmpaa)
-    eirs_ovov = ovov = tmpaa = tilaa = None
+    eris_ovov = ovov = tmpaa = tilaa = None
 
     eris_OVOV = np.asarray(eris.OVOV)
     eris_OVOO = np.asarray(eris.OVOO)
@@ -269,7 +269,7 @@ def update_amps(cc, t1, t2, eris):
     tmp1ab = lib.einsum('ie,meBJ->mBiJ', t1a, eris_ovVO)
     tmp1ab+= lib.einsum('IE,mjBE->mBjI', t1b, eris_ooVV)
     u2ab -= lib.einsum('ma,mBiJ->iJaB', t1a, tmp1ab)
-    eris_ooVV = eris_ovVo = tmp1ab = None
+    eris_ooVV = eris_ovVO = tmp1ab = None
 
     eris_OOvv = np.asarray(eris.OOvv)
     eris_OVvo = np.asarray(eris.OVvo)
@@ -279,7 +279,7 @@ def update_amps(cc, t1, t2, eris):
     tmp1ba = lib.einsum('IE,MEbj->MbIj', t1b, eris_OVvo)
     tmp1ba+= lib.einsum('ie,MJbe->MbJi', t1a, eris_OOvv)
     u2ab -= lib.einsum('MA,MbIj->jIbA', t1b, tmp1ba)
-    eris_OOvv = eris_OVvO = tmp1ba = None
+    eris_OOvv = eris_OVvo = tmp1ba = None
 
     u2aa += 2*lib.einsum('imae,mbej->ijab', t2aa, wovvo)
     u2aa += 2*lib.einsum('iMaE,MbEj->ijab', t2ab, wOvVo)
@@ -325,8 +325,8 @@ def update_amps(cc, t1, t2, eris):
     u2bb = u2bb - u2bb.transpose(0,1,3,2)
     u2bb = u2bb - u2bb.transpose(1,0,2,3)
 
-    eia_a = lib.direct_sum('i-a->ia', fooa.diagonal(), fvva.diagonal())
-    eia_b = lib.direct_sum('i-a->ia', foob.diagonal(), fvvb.diagonal())
+    eia_a = lib.direct_sum('i-a->ia', mo_ea_o, mo_ea_v)
+    eia_b = lib.direct_sum('i-a->ia', mo_eb_o, mo_eb_v)
     u1a /= eia_a
     u1b /= eia_b
 
@@ -400,13 +400,13 @@ def vector_to_amplitudes(vector, nmo, nocc):
         #return ccsd.vector_to_amplitudes_s4(vector, nmo, nocc)
         raise RuntimeError('Input vector is GCCSD vecotr')
     else:
-        size = vector.size
         sizea = nocca * nvira + nocca*(nocca-1)//2*nvira*(nvira-1)//2
         sizeb = noccb * nvirb + noccb*(noccb-1)//2*nvirb*(nvirb-1)//2
-        sizeab = nocca * noccb * nvira * nvirb
-        t1a, t2aa = ccsd.vector_to_amplitudes_s4(vector[:sizea], nmoa, nocca)
-        t1b, t2bb = ccsd.vector_to_amplitudes_s4(vector[sizea:sizea+sizeb], nmob, noccb)
-        t2ab = vector[size-sizeab:].copy().reshape(nocca,noccb,nvira,nvirb)
+        sections = np.cumsum([sizea, sizeb])
+        veca, vecb, t2ab = np.split(vector, sections)
+        t1a, t2aa = ccsd.vector_to_amplitudes_s4(veca, nmoa, nocca)
+        t1b, t2bb = ccsd.vector_to_amplitudes_s4(vecb, nmob, noccb)
+        t2ab = t2ab.copy().reshape(nocca,noccb,nvira,nvirb)
         return (t1a,t1b), (t2aa,t2ab,t2bb)
 
 def amplitudes_from_rccsd(t1, t2):
@@ -428,7 +428,7 @@ def _add_vvVV(mycc, t1, t2ab, eris, out=None):
     nocca, noccb, nvira, nvirb = t2ab.shape
 
     if mycc.direct:  # AO direct CCSD
-        if hasattr(eris, 'mo_coeff') and eris.mo_coeff is not None:
+        if getattr(eris, 'mo_coeff', None) is not None:
             mo_a, mo_b = eris.mo_coeff
         else:
             moidxa, moidxb = mycc.get_frozen_mask()
@@ -465,7 +465,7 @@ def _add_vvvv(mycc, t1, t2, eris, out=None, with_ovvv=False, t2sym=None):
         assert(t2sym is None)
         if with_ovvv:
             raise NotImplementedError
-        if hasattr(eris, 'mo_coeff') and eris.mo_coeff is not None:
+        if getattr(eris, 'mo_coeff', None) is not None:
             mo_a, mo_b = eris.mo_coeff
         else:
             moidxa, moidxb = mycc.get_frozen_mask()
@@ -543,7 +543,8 @@ class UCCSD(ccsd.CCSD):
 # * One list : Same alpha and beta orbital indices to be frozen
 # * A pair of list : First list is the orbital indices to be frozen for alpha
 #       orbitals, second list is for beta orbitals
-    def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
+        assert isinstance(mf, scf.uhf.UHF)
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
 
     get_nocc = get_nocc
@@ -556,14 +557,14 @@ class UCCSD(ccsd.CCSD):
             eris = self.ao2mo(self.mo_coeff)
         nocca, noccb = self.nocc
 
-        fooa = eris.focka[:nocca,:nocca]
-        foob = eris.fockb[:noccb,:noccb]
         fova = eris.focka[:nocca,nocca:]
         fovb = eris.fockb[:noccb,noccb:]
-        fvva = eris.focka[nocca:,nocca:]
-        fvvb = eris.fockb[noccb:,noccb:]
-        eia_a = lib.direct_sum('i-a->ia', fooa.diagonal(), fvva.diagonal())
-        eia_b = lib.direct_sum('i-a->ia', foob.diagonal(), fvvb.diagonal())
+        mo_ea_o = eris.mo_energy[0][:nocca]
+        mo_ea_v = eris.mo_energy[0][nocca:]
+        mo_eb_o = eris.mo_energy[1][:noccb]
+        mo_eb_v = eris.mo_energy[1][noccb:]
+        eia_a = lib.direct_sum('i-a->ia', mo_ea_o, mo_ea_v)
+        eia_b = lib.direct_sum('i-a->ia', mo_eb_o, mo_eb_v)
 
         t1a = fova.conj() / eia_a
         t1b = fovb.conj() / eia_b
@@ -603,13 +604,11 @@ class UCCSD(ccsd.CCSD):
         if mbpt2:
             pt = ump2.UMP2(self._scf, self.frozen, self.mo_coeff, self.mo_occ)
             self.e_corr, self.t2 = pt.kernel(eris=eris)
-            nocca, noccb = self.nocc
-            nmoa, nmob = self.nmo
-            nvira, nvirb = nmoa-nocca, nmob-noccb
+            t2ab = self.t2[1]
+            nocca, noccb, nvira, nvirb = t2ab.shape
             self.t1 = (np.zeros((nocca,nvira)), np.zeros((noccb,nvirb)))
             return self.e_corr, self.t1, self.t2
 
-        if eris is None: eris = self.ao2mo(self.mo_coeff)
         return ccsd.CCSD.ccsd(self, t1, t2, eris)
 
     def solve_lambda(self, t1=None, t2=None, l1=None, l2=None,
@@ -633,7 +632,7 @@ class UCCSD(ccsd.CCSD):
         return uccsd_t.kernel(self, eris, t1, t2, self.verbose)
     uccsd_t = ccsd_t
 
-    def make_rdm1(self, t1=None, t2=None, l1=None, l2=None):
+    def make_rdm1(self, t1=None, t2=None, l1=None, l2=None, ao_repr=False):
         '''Un-relaxed 1-particle density matrix in MO space
 
         Returns:
@@ -645,9 +644,9 @@ class UCCSD(ccsd.CCSD):
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return uccsd_rdm.make_rdm1(self, t1, t2, l1, l2)
+        return uccsd_rdm.make_rdm1(self, t1, t2, l1, l2, ao_repr=ao_repr)
 
-    def make_rdm2(self, t1=None, t2=None, l1=None, l2=None):
+    def make_rdm2(self, t1=None, t2=None, l1=None, l2=None, ao_repr=False):
         '''2-particle density matrix in spin-oribital basis.
         '''
         from pyscf.cc import uccsd_rdm
@@ -656,7 +655,19 @@ class UCCSD(ccsd.CCSD):
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return uccsd_rdm.make_rdm2(self, t1, t2, l1, l2)
+        return uccsd_rdm.make_rdm2(self, t1, t2, l1, l2, ao_repr=ao_repr)
+
+    def spin_square(self, mo_coeff=None, s=None):
+        from pyscf.fci.spin_op import spin_square_general
+        if mo_coeff is None:
+            mo_coeff = self.mo_coeff
+        if s is None:
+            s = self._scf.get_ovlp()
+
+        dma,dmb        = self.make_rdm1()
+        dmaa,dmab,dmbb = self.make_rdm2()
+
+        return spin_square_general(dma,dmb,dmaa,dmab,dmbb,mo_coeff,s)
 
     def ao2mo(self, mo_coeff=None):
         nmoa, nmob = self.get_nmo()
@@ -669,7 +680,7 @@ class UCCSD(ccsd.CCSD):
             (mem_incore+mem_now < self.max_memory or self.incore_complete)):
             return _make_eris_incore(self, mo_coeff)
 
-        elif hasattr(self._scf, 'with_df'):
+        elif getattr(self._scf, 'with_df', None):
             logger.warn(self, 'UCCSD detected DF being used in the HF object. '
                         'MO integrals are computed based on the DF 3-index tensors.\n'
                         'It\'s recommended to use dfccsd.CCSD for the '
@@ -730,8 +741,36 @@ class UCCSD(ccsd.CCSD):
         if nmo is None: nmo = self.nmo
         return vector_to_amplitudes(vector, nmo, nocc)
 
+    def vector_size(self, nmo=None, nocc=None):
+        if nocc is None: nocc = self.nocc
+        if nmo is None: nmo = self.nmo
+        nocca, noccb = nocc
+        nmoa, nmob = nmo
+        nvira, nvirb = nmoa-nocca, nmob-noccb
+        sizea = nocca * nvira + nocca*(nocca-1)//2*nvira*(nvira-1)//2
+        sizeb = noccb * nvirb + noccb*(noccb-1)//2*nvirb*(nvirb-1)//2
+        sizeab = nocca * noccb * nvira * nvirb
+        return sizea + sizeb + sizeab
+
     def amplitudes_from_rccsd(self, t1, t2):
         return amplitudes_from_rccsd(t1, t2)
+
+    def get_t1_diagnostic(self, t1=None):
+        if t1 is None: t1 = self.t1
+        raise NotImplementedError
+        #return get_t1_diagnostic(t1)
+
+    def get_d1_diagnostic(self, t1=None):
+        if t1 is None: t1 = self.t1
+        raise NotImplementedError
+        #return get_d1_diagnostic(t1)
+
+    def get_d2_diagnostic(self, t2=None):
+        if t2 is None: t2 = self.t2
+        raise NotImplementedError
+        #return get_d2_diagnostic(t2)
+
+CCSD = UCCSD
 
 
 class _ChemistsERIs(ccsd._ChemistsERIs):
@@ -765,18 +804,20 @@ class _ChemistsERIs(ccsd._ChemistsERIs):
                 (mo_coeff[0][:,mo_idx[0]], mo_coeff[1][:,mo_idx[1]])
 # Note: Recomputed fock matrix since SCF may not be fully converged.
         dm = mycc._scf.make_rdm1(mycc.mo_coeff, mycc.mo_occ)
-        fockao = mycc._scf.get_hcore() + mycc._scf.get_veff(mycc.mol, dm)
+        vhf = mycc._scf.get_veff(mycc.mol, dm)
+        fockao = mycc._scf.get_fock(vhf=vhf, dm=dm)
         self.focka = reduce(np.dot, (mo_coeff[0].conj().T, fockao[0], mo_coeff[0]))
         self.fockb = reduce(np.dot, (mo_coeff[1].conj().T, fockao[1], mo_coeff[1]))
         self.fock = (self.focka, self.fockb)
-        self.nocc = mycc.nocc
-        self.nocca, self.noccb = self.nocc
+        self.e_hf = mycc._scf.energy_tot(dm=dm, vhf=vhf)
+        nocca, noccb = self.nocc = mycc.nocc
         self.mol = mycc.mol
 
-        mo_ea = self.focka.diagonal()
-        mo_eb = self.fockb.diagonal()
-        gap_a = abs(mo_ea[:self.nocca,None] - mo_ea[None,self.nocca:])
-        gap_b = abs(mo_eb[:self.noccb,None] - mo_eb[None,self.noccb:])
+        mo_ea = self.focka.diagonal().real
+        mo_eb = self.fockb.diagonal().real
+        self.mo_energy = (mo_ea, mo_eb)
+        gap_a = abs(mo_ea[:nocca,None] - mo_ea[None,nocca:])
+        gap_b = abs(mo_eb[:noccb,None] - mo_eb[None,noccb:])
         if gap_a.size > 0:
             gap_a = gap_a.min()
         else:
@@ -834,7 +875,6 @@ def _get_ovvv_base(ovvv, *slices):
         return ovvv
 
 def _make_eris_incore(mycc, mo_coeff=None, ao2mofn=None):
-    cput0 = (time.clock(), time.time())
     eris = _ChemistsERIs()
     eris._common_init_(mycc, mo_coeff)
 
@@ -914,7 +954,6 @@ def _make_eris_incore(mycc, mo_coeff=None, ao2mofn=None):
     return eris
 
 def _make_eris_outcore(mycc, mo_coeff=None):
-    cput0 = (time.clock(), time.time())
     eris = _ChemistsERIs()
     eris._common_init_(mycc, mo_coeff)
 
@@ -1051,10 +1090,142 @@ def make_tau_ab(t2ab, t1, r1, fac=1, out=None):
     tau1ab += t2ab
     return tau1ab
 
+def _fp(nocc, nmo):
+    nocca, noccb = nocc
+    nmoa, nmob = nmo
+    nvira, nvirb = nmoa - nocca, nmob - noccb
+
+    # vvvv
+    fp  = nocca**2 * nvira**4
+    fp += noccb**2 * nvirb**4
+    fp += nocca    * nvira**2 * noccb    * nvirb**2 * 2
+
+    # ovvv
+    fp += nocca**2 * nvira**3 * 2
+    fp += nocca**2 * nvira**3 * 2
+    fp += nocca**2 * nvira**3 * 2
+    fp += nocca**3 * nvira**3 * 2
+    fp += nocca**3 * nvira**2 * 2
+
+    # OVVV
+    fp += noccb**2 * nvirb**3 * 2
+    fp += noccb**2 * nvirb**3 * 2
+    fp += noccb**2 * nvirb**3 * 2
+    fp += noccb**3 * nvirb**3 * 2
+    fp += noccb**3 * nvirb**2 * 2
+
+    # ovVV
+    fp += nocca    * nvira * noccb    * nvirb**2 * 2
+    fp += nocca**2 * nvira            * nvirb**2 * 2
+    fp += nocca    * nvira * noccb    * nvirb**2 * 2
+    fp += nocca    * nvira * noccb    * nvirb**2 * 2
+    fp += nocca**2 * nvira * noccb    * nvirb**2 * 2
+    fp += nocca**2 * nvira * noccb    * nvirb    * 2
+
+    # OVvv
+    fp += nocca    * nvira**2 * noccb    * nvirb * 2
+    fp +=            nvira**2 * noccb**2 * nvirb * 2
+    fp += nocca    * nvira**2 * noccb    * nvirb * 2
+    fp += nocca    * nvira**2 * noccb    * nvirb * 2
+    fp += nocca    * nvira**2 * noccb**2 * nvirb * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb * 2
+
+    fp += nocca**4 * nvira    * 2
+    fp += nocca**4 * nvira**2 * 2
+    fp += nocca**4 * nvira**2 * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += nocca**2 * nvira**3 * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += nocca**3 * nvira**3 * 2
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += nocca**3 * nvira**2 * 2
+
+    fp += noccb**4 * nvirb    * 2
+    fp += noccb**4 * nvirb**2 * 2
+    fp += noccb**4 * nvirb**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += noccb**2 * nvirb**3 * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += noccb**3 * nvirb**3 * 2
+    fp += noccb**2 * nvirb**2 * nocca    * nvira    * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca**2            * noccb    * nvirb**2 * 2
+    fp += noccb**2 * nvirb    * nocca    * nvira    * 2
+    fp += noccb**2 * nvirb    * nocca    * nvira    * 2
+    fp += noccb**2            * nocca    * nvira**2 * 2
+
+    fp += nocca**2            * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb**2            * 2
+    fp += nocca**2 * nvira    * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb**2 * nvirb    * 2
+
+    fp += nocca    * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb    * nvirb**2 * 2
+    fp += nocca    * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb    * nvirb**2 * 2
+
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb**2 * 2
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb**2 * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb**2 * 2
+    fp += nocca    * nvira**2 * noccb**2 * nvirb    * 2
+
+    fp += nocca    * nvira    * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca**2            * noccb    * nvirb**2 * 2
+    fp += nocca    * nvira**2 * noccb**2            * 2
+
+    fp += nocca**3 * nvira**2 * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca**2            * noccb    * nvirb**2 * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += noccb**2 * nvirb    * nocca    * nvira    * 2
+    fp += noccb**2            * nocca    * nvira**2 * 2
+    fp += noccb**2 * nvirb    * nocca    * nvira    * 2
+
+    fp += nocca**3 * nvira**3 * 2
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += noccb**3 * nvirb**3 * 2
+    fp += noccb**2 * nvirb**2 * nocca    * nvira    * 2
+
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb**2 * 2
+    fp += nocca    * nvira**2 * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca**2 * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb**2 * 2
+
+    fp += nocca**2 * nvira**3 * 2
+    fp += noccb**2 * nvirb**3 * 2
+    fp += nocca    * nvira    * noccb    * nvirb**2 * 2
+    fp += nocca    * nvira**2 * noccb    * nvirb    * 2
+    fp += nocca**3 * nvira**2 * 2
+    fp += noccb**3 * nvirb**2 * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb    * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+
+    fp += nocca**2 * nvira**3 * 2
+    fp += noccb**2 * nvirb**3 * 2
+    fp += nocca**2 * nvira    * noccb    * nvirb    * 2
+    fp += nocca    * nvira    * noccb**2 * nvirb    * 2
+    return fp
+
 
 if __name__ == '__main__':
-    import copy
-    from pyscf import scf
     from pyscf import gto
 
     mol = gto.Mole()

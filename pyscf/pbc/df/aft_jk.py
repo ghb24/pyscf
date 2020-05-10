@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -71,8 +71,6 @@ def get_j_for_bands(mydf, dm_kpts, hermi=1, kpts=numpy.zeros((1,3)), kpts_band=N
     dms = _format_dms(dm_kpts, kpts)
     nset, nkpts, nao = dms.shape[:3]
 
-    dmsR = dms.real.reshape(nset,nkpts,nao**2)
-    dmsI = dms.imag.reshape(nset,nkpts,nao**2)
     kpt_allow = numpy.zeros(3)
     mesh = mydf.mesh
     coulG = mydf.weighted_coulG(kpt_allow, False, mesh)
@@ -159,7 +157,6 @@ def get_k_kpts(mydf, dm_kpts, hermi=1, kpts=numpy.zeros((1,3)), kpts_band=None,
         #buf1R = numpy.empty((blksize*nao**2))
         #buf1I = numpy.empty((blksize*nao**2))
         for aoaoks, p0, p1 in mydf.ft_loop(mesh, kpt, kptjs, max_memory=max_memory1):
-            coulG = numpy.sqrt(vkcoulG[p0:p1])
             nG = p1 - p0
             bufR = numpy.empty((nG*nao**2))
             bufI = numpy.empty((nG*nao**2))
@@ -177,13 +174,14 @@ def get_k_kpts(mydf, dm_kpts, hermi=1, kpts=numpy.zeros((1,3)), kpts_band=None,
                 pLqI = numpy.ndarray((nao,nG,nao), buffer=bufI)
                 pLqR[:] = aoao.real.reshape(nG,nao,nao).transpose(1,0,2)
                 pLqI[:] = aoao.imag.reshape(nG,nao,nao).transpose(1,0,2)
-                pLqR *= coulG.reshape(1,nG,1)
-                pLqI *= coulG.reshape(1,nG,1)
-                iLkR = numpy.ndarray((nao*nG,nao), buffer=buf1R)
-                iLkI = numpy.ndarray((nao*nG,nao), buffer=buf1I)
+                iLkR = numpy.ndarray((nao,nG,nao), buffer=buf1R)
+                iLkI = numpy.ndarray((nao,nG,nao), buffer=buf1I)
                 for i in range(nset):
-                    iLkR, iLkI = zdotNN(pLqR.reshape(-1,nao), pLqI.reshape(-1,nao),
-                                        dmsR[i,kj], dmsI[i,kj], 1, iLkR, iLkI)
+                    zdotNN(pLqR.reshape(-1,nao), pLqI.reshape(-1,nao),
+                           dmsR[i,kj], dmsI[i,kj], 1,
+                           iLkR.reshape(-1,nao), iLkI.reshape(-1,nao))
+                    iLkR *= vkcoulG[p0:p1].reshape(1,nG,1)
+                    iLkI *= vkcoulG[p0:p1].reshape(1,nG,1)
                     zdotNC(iLkR.reshape(nao,-1), iLkI.reshape(nao,-1),
                            pLqR.reshape(nao,-1).T, pLqI.reshape(nao,-1).T,
                            1, vkR[i,ki], vkI[i,ki], 1)
@@ -192,11 +190,12 @@ def get_k_kpts(mydf, dm_kpts, hermi=1, kpts=numpy.zeros((1,3)), kpts_band=None,
 #:v4 = numpy.einsum('iLj,lLk->ijkl', pqk, pqk.conj())
 #:vk += numpy.einsum('ijkl,li->kj', v4, dm)
                 if swap_2e and not is_zero(kpt):
-                    iLkR = iLkR.reshape(nao,-1)
-                    iLkI = iLkI.reshape(nao,-1)
                     for i in range(nset):
-                        iLkR, iLkI = zdotNN(dmsR[i,ki], dmsI[i,ki], pLqR.reshape(nao,-1),
-                                            pLqI.reshape(nao,-1), 1, iLkR, iLkI)
+                        zdotNN(dmsR[i,ki], dmsI[i,ki], pLqR.reshape(nao,-1),
+                               pLqI.reshape(nao,-1), 1,
+                               iLkR.reshape(nao,-1), iLkI.reshape(nao,-1))
+                        iLkR *= vkcoulG[p0:p1].reshape(1,nG,1)
+                        iLkI *= vkcoulG[p0:p1].reshape(1,nG,1)
                         zdotCN(pLqR.reshape(-1,nao).T, pLqI.reshape(-1,nao).T,
                                iLkR.reshape(-1,nao), iLkI.reshape(-1,nao),
                                1, vkR[i,kj], vkI[i,kj], 1)
@@ -214,9 +213,11 @@ def get_k_kpts(mydf, dm_kpts, hermi=1, kpts=numpy.zeros((1,3)), kpts_band=None,
         vk_kpts = vkR + vkI * 1j
     vk_kpts *= 1./nkpts
 
-    # G=0 was not included in the non-uniform grids
-    if cell.dimension != 3 and exxdiv:
-        assert(exxdiv.lower() == 'ewald')
+    # Add ewald_exxdiv contribution because G=0 was not included in the
+    # non-uniform grids
+    if (exxdiv == 'ewald' and
+        (cell.dimension < 2 or  # 0D and 1D are computed with inf_vacuum
+         (cell.dimension == 2 and cell.low_dim_ft_type == 'inf_vacuum'))):
         _ewald_exxdiv_for_G0(cell, kpts_band, dms, vk_kpts, kpts_band)
 
     return _format_jks(vk_kpts, dm_kpts, input_band, kpts)
@@ -273,7 +274,7 @@ def get_jk(mydf, dm, hermi=1, kpt=numpy.zeros(3),
 
     # rho_rs(-G+k_rs) is computed as conj(rho_{rs^*}(G-k_rs))
     #                 == conj(transpose(rho_sr(G+k_sr), (0,2,1)))
-    blksize = max(int(max_memory*.25e6/16/nao**2), 16)
+    #blksize = max(int(max_memory*.25e6/16/nao**2), 16)
     pLqR = pLqI = None
     for pqkR, pqkI, p0, p1 in mydf.pw_loop(mesh, kptii, max_memory=max_memory):
         t2 = log.timer_debug1('%d:%d ft_aopair'%(p0,p1), *t2)
@@ -297,30 +298,32 @@ def get_jk(mydf, dm, hermi=1, kpt=numpy.zeros(3),
         #t2 = log.timer_debug1('        with_j', *t2)
 
         if with_k:
-            coulG = numpy.sqrt(vkcoulG[p0:p1])
-            pqkR *= coulG
-            pqkI *= coulG
             #:v4 = numpy.einsum('ijL,lkL->ijkl', pqk, pqk.conj())
             #:vk += numpy.einsum('ijkl,jk->il', v4, dm)
             pLqR = lib.transpose(pqkR, axes=(0,2,1), out=pLqR).reshape(-1,nao)
             pLqI = lib.transpose(pqkI, axes=(0,2,1), out=pLqI).reshape(-1,nao)
-            iLkR = numpy.ndarray((nao*(p1-p0),nao), buffer=pqkR)
-            iLkI = numpy.ndarray((nao*(p1-p0),nao), buffer=pqkI)
+            nG = p1 - p0
+            iLkR = numpy.ndarray((nao,nG,nao), buffer=pqkR)
+            iLkI = numpy.ndarray((nao,nG,nao), buffer=pqkI)
             for i in range(nset):
                 if k_real:
-                    lib.dot(pLqR, dmsR[i], 1, iLkR)
-                    lib.dot(pLqI, dmsR[i], 1, iLkI)
+                    lib.dot(pLqR, dmsR[i], 1, iLkR.reshape(nao*nG,nao))
+                    lib.dot(pLqI, dmsR[i], 1, iLkI.reshape(nao*nG,nao))
+                    iLkR *= vkcoulG[p0:p1].reshape(1,nG,1)
+                    iLkI *= vkcoulG[p0:p1].reshape(1,nG,1)
                     lib.dot(iLkR.reshape(nao,-1), pLqR.reshape(nao,-1).T, 1, vkR[i], 1)
                     lib.dot(iLkI.reshape(nao,-1), pLqI.reshape(nao,-1).T, 1, vkR[i], 1)
                 else:
-                    zdotNN(pLqR, pLqI, dmsR[i], dmsI[i], 1, iLkR, iLkI)
+                    zdotNN(pLqR, pLqI, dmsR[i], dmsI[i], 1,
+                           iLkR.reshape(-1,nao), iLkI.reshape(-1,nao))
+                    iLkR *= vkcoulG[p0:p1].reshape(1,nG,1)
+                    iLkI *= vkcoulG[p0:p1].reshape(1,nG,1)
                     zdotNC(iLkR.reshape(nao,-1), iLkI.reshape(nao,-1),
                            pLqR.reshape(nao,-1).T, pLqI.reshape(nao,-1).T,
                            1, vkR[i], vkI[i])
             #t2 = log.timer_debug1('        with_k', *t2)
-        pqkR = pqkI = coulG = pLqR = pLqI = iLkR = iLkI = None
+        pqkR = pqkI = pLqR = pLqI = iLkR = iLkI = None
         #t2 = log.timer_debug1('%d:%d'%(p0,p1), *t2)
-    bufR = bufI = None
     t1 = log.timer_debug1('aft_jk.get_jk', *t1)
 
     if with_j:
@@ -334,8 +337,11 @@ def get_jk(mydf, dm, hermi=1, kpt=numpy.zeros(3),
             vk = vkR
         else:
             vk = vkR + vkI * 1j
-        if cell.dimension != 3 and exxdiv:
-            assert(exxdiv.lower() == 'ewald')
+        # Add ewald_exxdiv contribution because G=0 was not included in the
+        # non-uniform grids
+        if (exxdiv == 'ewald' and
+            (cell.dimension < 2 or  # 0D and 1D are computed with inf_vacuum
+             (cell.dimension == 2 and cell.low_dim_ft_type == 'inf_vacuum'))):
             _ewald_exxdiv_for_G0(cell, kpt, dms, vk)
         vk = vk.reshape(dm.shape)
     return vj, vk

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 RHF-CCSD(T) for real integrals
 '''
 
-import gc
 import time
 import ctypes
 import numpy
@@ -31,7 +30,7 @@ from pyscf.cc import _ccsd
 
 # t3 as ijkabc
 
-# JCP, 94, 442.  Error in Eq (1), should be [ia] >= [jb] >= [kc]
+# JCP 94, 442 (1991); DOI:10.1063/1.460359.  Error in Eq (1), should be [ia] >= [jb] >= [kc]
 def kernel(mycc, eris, t1=None, t2=None, verbose=logger.NOTE):
     cpu1 = cpu0 = (time.clock(), time.time())
     log = logger.new_logger(mycc, verbose)
@@ -156,7 +155,6 @@ def _sort_eri(mycc, eris, nocc, nvir, vvop, log):
     with lib.call_in_background(vvop.__setitem__, sync=not mycc.async_io) as save:
         bufopv = numpy.empty((nocc,nmo,nvir), dtype=dtype)
         buf1 = numpy.empty_like(bufopv)
-        buf = numpy.empty((nocc,nvir,nvir), dtype=dtype)
         for j0, j1 in lib.prange(0, nvir, blksize):
             ovov = numpy.asarray(eris.ovov[:,j0:j1])
             #ovvv = numpy.asarray(eris.ovvv[:,j0:j1])
@@ -182,7 +180,7 @@ def _sort_t2_vooo_(mycc, orbsym, t1, t2, eris):
         orbsym = numpy.asarray(orbsym, dtype=numpy.int32)
         o_sorted = _irrep_argsort(orbsym[:nocc])
         v_sorted = _irrep_argsort(orbsym[nocc:])
-        mo_energy = eris.fock.diagonal().real
+        mo_energy = eris.mo_energy
         mo_energy = numpy.hstack((mo_energy[:nocc][o_sorted],
                                   mo_energy[nocc:][v_sorted]))
         t1T = numpy.asarray(t1.T[v_sorted][:,o_sorted], order='C')
@@ -220,7 +218,7 @@ def _sort_t2_vooo_(mycc, orbsym, t1, t2, eris):
         t1T = t1.T.copy()
         t2T = lib.transpose(t2.reshape(nocc**2,nvir**2))
         t2T = lib.transpose(t2T.reshape(nvir**2,nocc,nocc), axes=(0,2,1), out=t2)
-        mo_energy = numpy.asarray(eris.fock.diagonal().real, order='C')
+        mo_energy = numpy.asarray(eris.mo_energy, order='C')
         def restore_t2_inplace(t2T):
             tmp = lib.transpose(t2T.reshape(nvir**2,nocc,nocc), axes=(0,2,1))
             t2 = lib.transpose(tmp.reshape(nvir**2,nocc**2), out=t2T)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,6 +41,10 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
             max_memory=MAX_MEMORY, ioblk_size=IOBLK_SIZE, verbose=logger.WARN):
     time_0pass = (time.clock(), time.time())
     log = logger.new_logger(mol, verbose)
+    if '_spinor' not in intor:
+        log.warn('r_ao2mo requires spinor integrals.\n'
+                 'Suffix _spinor is added to %s', intor)
+        intor = intor + '_spinor'
     intor, comp = gto.moleintor._get_intor_and_comp(mol._add_suffix(intor), comp)
     klsame = iden_coeffs(mo_coeffs[2], mo_coeffs[3])
 
@@ -69,7 +73,7 @@ def general(mol, mo_coeffs, erifile, dataname='eri_mo',
 
     if isinstance(erifile, str):
         if h5py.is_hdf5(erifile):
-            feri = h5py.File(erifile)
+            feri = h5py.File(erifile, 'a')
             if dataname in feri:
                 del(feri[dataname])
         else:
@@ -210,7 +214,7 @@ def half_e1(mol, mo_coeffs, swapfile,
 
     fswap = h5py.File(swapfile, 'w')
     for icomp in range(comp):
-        g = fswap.create_group(str(icomp))  # for h5py old version
+        fswap.create_group(str(icomp))  # for h5py old version
 
     tao = numpy.asarray(mol.tmap(), dtype=numpy.int32)
 
@@ -306,7 +310,6 @@ del(MAX_MEMORY)
 
 
 if __name__ == '__main__':
-    from pyscf import gto
     mol = gto.Mole()
     mol.verbose = 5
     mol.output = 'out_outcore'

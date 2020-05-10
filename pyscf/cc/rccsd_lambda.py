@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.cc import _ccsd
 from pyscf.cc import ccsd_lambda
-from pyscf.cc import rintermediates as imd
 
 einsum = lib.einsum
 
@@ -42,7 +41,6 @@ def kernel(mycc, eris=None, t1=None, t2=None, l1=None, l2=None,
 
 
 def make_intermediates(mycc, t1, t2, eris):
-    log = logger.Logger(mycc.stdout, mycc.verbose)
     nocc, nvir = t1.shape
     foo = eris.fock[:nocc,:nocc]
     fov = eris.fock[:nocc,nocc:]
@@ -238,7 +236,7 @@ def update_lambda(mycc, t1, t2, l1, l2, eris, imds):
     l1new += np.einsum('ijab,bj->ia', l2, imds.w3) * 2
     l1new -= np.einsum('ijba,bj->ia', l2, imds.w3)
 
-    eia = lib.direct_sum('i-j->ij', foo.diagonal(), fvv.diagonal())
+    eia = lib.direct_sum('i-j->ij', foo.diagonal(), fvv.diagonal() + mycc.level_shift)
     l1new /= eia
     l1new += l1
 
@@ -254,6 +252,7 @@ if __name__ == '__main__':
     from functools import reduce
     from pyscf import gto
     from pyscf import scf
+    from pyscf import ao2mo
     from pyscf.cc import rccsd
 
     mol = gto.Mole()

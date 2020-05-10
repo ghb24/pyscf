@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #
 
 import numpy
-from pyscf import symm
 from pyscf import lib
 from pyscf.lib import logger
 from pyscf.mcscf import mc1step
@@ -25,23 +24,21 @@ from pyscf.mcscf import mc2step
 from pyscf.mcscf import casci_symm
 from pyscf.mcscf import addons
 from pyscf import fci
-from pyscf import __config__
+from pyscf.soscf.newton_ah import _force_Ex_Ey_degeneracy_
 
 
 class SymAdaptedCASSCF(mc1step.CASSCF):
     __doc__ = mc1step.CASSCF.__doc__
-    def __init__(self, mf, ncas, nelecas, ncore=None, frozen=None):
-        assert(mf.mol.symmetry)
-        mc1step.CASSCF.__init__(self, mf, ncas, nelecas, ncore, frozen)
-        singlet = (getattr(__config__, 'mcscf_mc1step_CASCI_fcisolver_direct_spin0', False)
-                   and self.nelecas[0] == self.nelecas[1])
-        self.fcisolver = fci.solver(mf.mol, singlet, symm=True)
-        self.fcisolver.max_cycle = getattr(__config__,
-                                           'mcscf_mc1step_CASSCF_fcisolver_max_cycle', 50)
-        self.fcisolver.conv_tol = getattr(__config__,
-                                          'mcscf_mc1step_CASSCF_fcisolver_conv_tol', 1e-8)
-        self.fcisolver.lindep = getattr(__config__,
-                                        'mcscf_mc1step_CASCI_fcisolver_lindep', 1e-10)
+    def __init__(self, mf_or_mol, ncas, nelecas, ncore=None, frozen=None):
+        mc1step.CASSCF.__init__(self, mf_or_mol, ncas, nelecas, ncore, frozen)
+
+        assert(self.mol.symmetry)
+        fcisolver = self.fcisolver
+        if isinstance(fcisolver, fci.direct_spin0.FCISolver):
+            self.fcisolver = fci.direct_spin0_symm.FCISolver(self.mol)
+        else:
+            self.fcisolver = fci.direct_spin1_symm.FCISolver(self.mol)
+        self.fcisolver.__dict__.update(fcisolver.__dict__)
 
     @property
     def wfnsym(self):
@@ -114,6 +111,10 @@ class SymAdaptedCASSCF(mc1step.CASSCF):
         mc1 = newton_casscf_symm.CASSCF(self._scf, self.ncas, self.nelecas)
         mc1.__dict__.update(self.__dict__)
         mc1.max_cycle_micro = 10
+        # MRH, 04/08/2019: enable state-average CASSCF second-order algorithm
+        from pyscf.mcscf.addons import StateAverageMCSCFSolver
+        if isinstance (self, StateAverageMCSCFSolver):
+            mc1 = mc1.state_average_(self.weights)
         return mc1
 
 CASSCF = SymAdaptedCASSCF
@@ -125,16 +126,18 @@ def _symmetrize(mat, orbsym, groupname):
     mat1[allowed] = mat[allowed]
 
     if groupname in ('Dooh', 'Coov'):
-        from pyscf.soscf import newton_ah
-        newton_ah._force_Ex_Ey_degeneracy_(mat1, orbsym)
+        _force_Ex_Ey_degeneracy_(mat1, orbsym)
     return mat1
+
+from pyscf import scf
+scf.hf_symm.RHF.CASSCF = scf.hf_symm.ROHF.CASSCF = lib.class_as_method(SymAdaptedCASSCF)
+scf.uhf_symm.UHF.CASSCF = None
 
 
 if __name__ == '__main__':
     from pyscf import gto
     from pyscf import scf
     import pyscf.fci
-    from pyscf.mcscf import addons
 
     mol = gto.Mole()
     mol.verbose = 0

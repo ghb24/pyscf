@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,7 +38,6 @@ from pyscf.dmrgscf import dmrg_sym
 from pyscf import __config__
 
 # Libraries
-import pyscf.lib
 libunpack = lib.load_library('libicmpspt')
 
 # Settings
@@ -54,8 +53,7 @@ except ImportError:
     settings.MPIPREFIX = getattr(__config__, 'dmrgscf_MPIPREFIX', None)
     settings.BLOCKVERSION = getattr(__config__, 'dmrgscf_BLOCKVERSION', None)
     if (settings.BLOCKEXE is None or settings.BLOCKSCRATCHDIR is None):
-        import sys
-        sys.stderr.write('settings.py not found.  Please create %s\n'
+        sys.stderr.write('settings.py not found for module dmrgci.  Please create %s\n'
                          % os.path.join(os.path.dirname(__file__), 'settings.py'))
         raise ImportError('settings.py not found')
 
@@ -123,7 +121,7 @@ class DMRGCI(lib.StreamObject):
         self.integralFile = "FCIDUMP"
         self.configFile = "dmrg.conf"
         self.outputFile = "dmrg.out"
-        if hasattr(settings, 'BLOCKRUNTIMEDIR'):
+        if getattr(settings, 'BLOCKRUNTIMEDIR', None):
             self.runtimeDir = settings.BLOCKRUNTIMEDIR
         else:
             self.runtimeDir = '.'
@@ -239,9 +237,7 @@ class DMRGCI(lib.StreamObject):
         return self
 
     def dump_flags(self, verbose=None):
-        if verbose is None:
-            verbose = self.verbose
-        log = logger.Logger(self.stdout, verbose)
+        log = logger.new_logger(self, verbose)
         log.info('')
         log.info('******** Block flags ********')
         log.info('executable             = %s', self.executable)
@@ -284,7 +280,14 @@ class DMRGCI(lib.StreamObject):
             neleca = nelec - nelecb
         else :
             neleca, nelecb = nelec
-        dm1, dm2 = self.make_rdm12(state, norb, nelec, link_index, **kwargs)
+
+        # DO NOT call self.make_rdm12. Calling DMRGCI.make_rdm12 instead of
+        # self.make_rdm12 because self.make_rdm12 may be modified
+        # by state-average mcscf solver (see function mcscf.addons.state_average).
+        # When calling make_rdm1s from state-average FCI solver,
+        # DMRGCI.make_rdm12 ensures that the basic make_rdm12 method is called.
+        # (Issue https://github.com/pyscf/pyscf/issues/335)
+        dm1, dm2 = DMRGCI.make_rdm12(self, state, norb, nelec, link_index, **kwargs)
         dm1n = (2-(neleca+nelecb)/2.) * dm1 - numpy.einsum('pkkq->pq', dm2)
         dm1n *= 1./(neleca-nelecb+1)
         dm1a, dm1b = (dm1+dm1n)*.5, (dm1-dm1n)*.5
@@ -297,7 +300,7 @@ class DMRGCI(lib.StreamObject):
             neleca = nelec - nelecb
         else :
             neleca, nelecb = nelec
-        dm1, dm2 = self.trans_rdm12(statebra, stateket, norb, nelec, link_index, **kwargs)
+        dm1, dm2 = DMRGCI.trans_rdm12(self, statebra, stateket, norb, nelec, link_index, **kwargs)
         dm1n = (2-(neleca+nelecb)/2.) * dm1 - numpy.einsum('pkkq->pq', dm2)
         dm1n *= 1./(neleca-nelecb+1)
         dm1a, dm1b = (dm1+dm1n)*.5, (dm1-dm1n)*.5
@@ -305,7 +308,7 @@ class DMRGCI(lib.StreamObject):
 
     def make_rdm1(self, state, norb, nelec, link_index=None, **kwargs):
         # Avoid calling self.make_rdm12 because it may be overloaded
-        return self.make_rdm12(state, norb, nelec, link_index, **kwargs)[0]
+        return DMRGCI.make_rdm12(self, state, norb, nelec, link_index, **kwargs)[0]
 
     def make_rdm12(self, state, norb, nelec, link_index=None, **kwargs):
         nelectrons = 0
@@ -334,7 +337,7 @@ class DMRGCI(lib.StreamObject):
         return onepdm, twopdm
 
     def trans_rdm1(self, statebra, stateket, norb, nelec, link_index=None, **kwargs):
-        return self.trans_rdm12(statebra, stateket, norb, nelec, link_index, **kwargs)[0]
+        return DMRGCI.trans_rdm12(self, statebra, stateket, norb, nelec, link_index, **kwargs)[0]
 
     def trans_rdm12(self, statebra, stateket, norb, nelec, link_index=None, **kwargs):
         nelectrons = 0
@@ -438,14 +441,17 @@ class DMRGCI(lib.StreamObject):
 
         return onepdm, twopdm, threepdm
 
-    def make_rdm3(self, state, norb, nelec, dt=numpy.dtype('Float64'), filetype = "binary", link_index=None, **kwargs):
+    def make_rdm3(self, state, norb, nelec, dt=numpy.float64, filetype = "binary", link_index=None, restart=False, **kwargs):
         import os
 
         if self.has_threepdm == False:
             self.twopdm = False
-            self.extraline.append('threepdm\n')
+            if restart == True:
+                self.extraline.append('restart_threepdm')
+            else:
+                self.extraline.append('threepdm')
+            writeDMRGConfFile(self, nelec, restart)
 
-            writeDMRGConfFile(self, nelec, False)
             if self.verbose >= logger.DEBUG1:
                 inFile = self.configFile
                 #inFile = os.path.join(self.scratchDirectory,self.configFile)
@@ -482,8 +488,8 @@ class DMRGCI(lib.StreamObject):
             print('Reading binary 3RDM from STACKBLOCK')
             fname = os.path.join(self.scratchDirectory,"node0", "spatial_threepdm.%d.%d.bin" %(state, state))
             fnameout = os.path.join(self.scratchDirectory,"node0", "spatial_threepdm.%d.%d.bin.unpack" %(state, state))
-            libunpack.unpackE3(ctypes.c_char_p(fname), ctypes.c_char_p(fnameout), ctypes.c_int(norb))
-            E3 = numpy.fromfile(fnameout, dtype=numpy.dtype('Float64'))
+            libunpack.unpackE3(ctypes.c_char_p(fname.encode()), ctypes.c_char_p(fnameout.encode()), ctypes.c_int(norb))
+            E3 = numpy.fromfile(fnameout, dtype=numpy.float64)
             E3 = numpy.reshape(E3, (norb, norb, norb, norb, norb, norb), order='F')
           else:
             print('Reading binary 3RDM from BLOCK')
@@ -513,16 +519,21 @@ class DMRGCI(lib.StreamObject):
         print('')
         return E3
 
-    def make_rdm4(self, state, norb, nelec, dt=numpy.dtype('Float64'), filetype = "binary", link_index=None, **kwargs):
+    def make_rdm4(self, state, norb, nelec, dt=numpy.float64, filetype = "binary", link_index=None, restart=False, **kwargs):
         import os
 
         if self.has_fourpdm == False:
             self.twopdm = False
             self.threepdm = False
-            self.extraline.append('threepdm')
-            self.extraline.append('fourpdm')
+            self.twopdm = False
+            if restart == True:
+                self.extraline.append('restart_threepdm')
+                self.extraline.append('restart_fourpdm')
+            else:
+                self.extraline.append('threepdm')
+                self.extraline.append('fourpdm')
+            writeDMRGConfFile(self, nelec, restart)
 
-            writeDMRGConfFile(self, nelec, False)
             if self.verbose >= logger.DEBUG1:
               inFile = self.configFile
               #inFile = os.path.join(self.scratchDirectory,self.configFile)
@@ -561,8 +572,8 @@ class DMRGCI(lib.StreamObject):
             print('Reading binary 4RDM from STACKBLOCK')
             fname = os.path.join(self.scratchDirectory,"node0", "spatial_fourpdm.%d.%d.bin" %(state, state))
             fnameout = os.path.join(self.scratchDirectory,"node0", "spatial_fourpdm.%d.%d.bin.unpack" %(state, state))
-            libunpack.unpackE4(ctypes.c_char_p(fname), ctypes.c_char_p(fnameout), ctypes.c_int(norb))
-            E4 = numpy.fromfile(fnameout, dtype=numpy.dtype('Float64'))
+            libunpack.unpackE4(ctypes.c_char_p(fname.encode()), ctypes.c_char_p(fnameout.encode()), ctypes.c_int(norb))
+            E4 = numpy.fromfile(fnameout, dtype=numpy.float64)
             E4 = numpy.reshape(E4, (norb, norb, norb, norb, norb, norb, norb, norb), order='F')
           else:
             print('Reading binary 4RDM from BLOCK')
@@ -938,7 +949,7 @@ def readEnergy(DMRGCI):
 def DMRGSCF(mf, norb, nelec, maxM=1000, tol=1.e-8, *args, **kwargs):
     '''Shortcut function to setup CASSCF using the DMRG solver.  The DMRG
     solver is properly initialized in this function so that the 1-step
-    algorithm can applied with DMRG-CASSCF.
+    algorithm can be applied with DMRG-CASSCF.
 
     Examples:
 
@@ -948,10 +959,10 @@ def DMRGSCF(mf, norb, nelec, maxM=1000, tol=1.e-8, *args, **kwargs):
     >>> mc.kernel()
     -74.414908818611522
     '''
-    if (hasattr(mf,'with_df')):
-      mc = mcscf.DFCASSCF(mf, norb, nelec, *args, **kwargs)
+    if getattr(mf, 'with_df', None):
+        mc = mcscf.DFCASSCF(mf, norb, nelec, *args, **kwargs)
     else:
-      mc = mcscf.CASSCF(mf, norb, nelec, *args, **kwargs)
+        mc = mcscf.CASSCF(mf, norb, nelec, *args, **kwargs)
     mc.fcisolver = DMRGCI(mf.mol, maxM, tol=tol)
     mc.callback = mc.fcisolver.restart_scheduler_()
     if mc.chkfile == mc._scf._chkfile.name:
@@ -1004,7 +1015,6 @@ def block_version(blockexe):
 if __name__ == '__main__':
     from pyscf import gto
     from pyscf import scf
-    from pyscf import mcscf
     settings.MPIPREFIX =''
     b = 1.4
     mol = gto.Mole()

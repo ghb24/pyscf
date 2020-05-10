@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ from pyscf.pbc.dft.kuks import energy_elec
 @lib.with_doc(kuks.get_veff.__doc__)
 def get_veff(ks, cell=None, dm=None, dm_last=0, vhf_last=0, hermi=1,
              kpts=None, kpts_band=None):
-    if hasattr(dm, 'mo_coeff'):
+    if getattr(dm, 'mo_coeff', None) is not None:
         mo_coeff = dm.mo_coeff
         mo_occ_a = [(x > 0).astype(np.double) for x in dm.mo_occ]
         mo_occ_b = [(x ==2).astype(np.double) for x in dm.mo_occ]
@@ -40,21 +40,21 @@ def get_veff(ks, cell=None, dm=None, dm_last=0, vhf_last=0, hermi=1,
     return kuks.get_veff(ks, cell, dm, dm_last, vhf_last, hermi, kpts, kpts_band)
 
 
-class KROKS(krohf.KROHF):
+class KROKS(rks.KohnShamDFT, krohf.KROHF):
     '''RKS class adapted for PBCs with k-point sampling.
     '''
-    def __init__(self, cell, kpts=np.zeros((1,3))):
+    def __init__(self, cell, kpts=np.zeros((1,3)), xc='LDA,VWN'):
         krohf.KROHF.__init__(self, cell, kpts)
-        rks._dft_common_init_(self)
+        rks.KohnShamDFT.__init__(self, xc)
 
-    def dump_flags(self):
-        krohf.KROHF.dump_flags(self)
-        lib.logger.info(self, 'XC functionals = %s', self.xc)
-        self.grids.dump_flags()
+    def dump_flags(self, verbose=None):
+        krohf.KROHF.dump_flags(self, verbose)
+        rks.KohnShamDFT.dump_flags(self, verbose)
+        return self
 
     get_veff = get_veff
     energy_elec = energy_elec
-    define_xc_ = rks.define_xc_
+    get_rho = kuks.get_rho
 
     density_fit = rks._patch_df_beckegrids(krohf.KROHF.density_fit)
     mix_density_fit = rks._patch_df_beckegrids(krohf.KROHF.mix_density_fit)

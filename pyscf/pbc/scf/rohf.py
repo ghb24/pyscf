@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,8 +37,10 @@ get_occ = mol_rohf.get_occ
 get_grad = mol_rohf.get_grad
 make_rdm1 = mol_rohf.make_rdm1
 energy_elec = mol_rohf.energy_elec
+dip_moment = pbcuhf.dip_moment
+get_rho = pbcuhf.get_rho
 
-class ROHF(mol_rohf.ROHF, pbchf.RHF):
+class ROHF(pbchf.RHF, mol_rohf.ROHF):
     '''ROHF class for PBCs.
     '''
 
@@ -48,27 +50,40 @@ class ROHF(mol_rohf.ROHF, pbchf.RHF):
                  exxdiv=getattr(__config__, 'pbc_scf_SCF_exxdiv', 'ewald')):
         pbchf.SCF.__init__(self, cell, kpt, exxdiv)
         self.nelec = None
-        self._keys = self._keys.union(['nelec'])
 
-    def dump_flags(self):
-        pbchf.SCF.dump_flags(self)
-        if self.nelec is None:
-            nelec = self.cell.nelec
+    @property
+    def nelec(self):
+        if self._nelec is not None:
+            return self._nelec
         else:
-            nelec = self.nelec
+            cell = self.cell
+            ne = cell.nelectron
+            nalpha = (ne + cell.spin) // 2
+            nbeta = nalpha - cell.spin
+            if nalpha + nbeta != ne:
+                raise RuntimeError('Electron number %d and spin %d are not consistent\n'
+                                   'Note cell.spin = 2S = Nalpha - Nbeta, not 2S+1' %
+                                   (ne, self.spin))
+            return nalpha, nbeta
+    @nelec.setter
+    def nelec(self, x):
+        self._nelec = x
+
+    def dump_flags(self, verbose=None):
+        pbchf.SCF.dump_flags(self, verbose)
         logger.info(self, 'number of electrons per unit cell  '
-                    'alpha = %d beta = %d', *nelec)
+                    'alpha = %d beta = %d', *self.nelec)
         return self
 
-    build = pbchf.SCF.build
-    check_sanity = pbchf.SCF.check_sanity
-    get_hcore = pbchf.SCF.get_hcore
-    get_ovlp = pbchf.SCF.get_ovlp
-    get_jk = pbchf.SCF.get_jk
-    get_j = pbchf.SCF.get_j
-    get_k = pbchf.SCF.get_k
-    get_jk_incore = pbchf.SCF.get_jk_incore
-    energy_tot = pbchf.SCF.energy_tot
+    get_rho = get_rho
+
+    eig = mol_rohf.ROHF.eig
+
+    get_fock = mol_rohf.ROHF.get_fock
+    get_occ = mol_rohf.ROHF.get_occ
+    get_grad = mol_rohf.ROHF.get_grad
+    make_rdm1 = mol_rohf.ROHF.make_rdm1
+    energy_elec = mol_rohf.ROHF.energy_elec
 
     def get_veff(self, cell=None, dm=None, dm_last=0, vhf_last=0, hermi=1,
                  kpt=None, kpts_band=None):
@@ -77,7 +92,7 @@ class ROHF(mol_rohf.ROHF, pbchf.RHF):
         if kpt is None: kpt = self.kpt
         if isinstance(dm, np.ndarray) and dm.ndim == 2:
             dm = np.asarray((dm*.5,dm*.5))
-        if hasattr(dm, 'mo_coeff'):
+        if getattr(dm, 'mo_coeff', None) is not None:
             mo_coeff = dm.mo_coeff
             mo_occ_a = (dm.mo_occ > 0).astype(np.double)
             mo_occ_b = (dm.mo_occ ==2).astype(np.double)
@@ -98,27 +113,20 @@ class ROHF(mol_rohf.ROHF, pbchf.RHF):
         '''
         raise NotImplementedError
 
-    def dip_moment(self, mol=None, dm=None, unit='Debye', verbose=logger.NOTE,
+    @lib.with_doc(dip_moment.__doc__)
+    def dip_moment(self, cell=None, dm=None, unit='Debye', verbose=logger.NOTE,
                    **kwargs):
-        # skip dipole memont for crystal
-        return
+        if cell is None: cell = self.cell
+        if dm is None: dm = self.make_rdm1()
+        rho = kwargs.pop('rho', None)
+        if rho is None:
+            rho = self.get_rho(dm)
+        return dip_moment(cell, dm, unit, verbose, rho=rho, kpt=self.kpt, **kwargs)
 
     def get_init_guess(self, cell=None, key='minao'):
         if cell is None: cell = self.cell
         dm = mol_rohf.ROHF.get_init_guess(self, cell, key)
-        if cell.dimension < 3:
-            if isinstance(dm, np.ndarray) and dm.ndim == 2:
-                ne = np.einsum('ij,ji->', dm, self.get_ovlp(cell))
-            else:
-                ne = np.einsum('xij,ji->', dm, self.get_ovlp(cell))
-            if abs(ne - cell.nelectron).max() > 1e-7:
-                logger.warn(self, 'Big error detected in the electron number '
-                            'of initial guess density matrix (Ne/cell = %g)!\n'
-                            '  This can cause huge error in Fock matrix and '
-                            'lead to instability in SCF for low-dimensional '
-                            'systems.\n  DM is normalized to correct number '
-                            'of electrons', ne)
-                dm *= cell.nelectron / ne
+        dm = pbchf.normalize_dm_(self, dm)
         return dm
 
     def init_guess_by_1e(self, cell=None):
@@ -126,27 +134,25 @@ class ROHF(mol_rohf.ROHF, pbchf.RHF):
         if cell.dimension < 3:
             logger.warn(self, 'Hcore initial guess is not recommended in '
                         'the SCF of low-dimensional systems.')
-        return mol_uhf.UHF.init_guess_by_1e(cell)
+        return mol_rohf.ROHF.init_guess_by_1e(self, cell)
 
     def init_guess_by_chkfile(self, chk=None, project=True, kpt=None):
         if chk is None: chk = self.chkfile
         if kpt is None: kpt = self.kpt
         return pbcuhf.init_guess_by_chkfile(self.cell, chk, project, kpt)
 
-    dump_chk = pbchf.SCF.dump_chk
-    _is_mem_enough = pbchf.SCF._is_mem_enough
+    init_guess_by_minao  = mol_rohf.ROHF.init_guess_by_minao
+    init_guess_by_atom   = mol_rohf.ROHF.init_guess_by_atom
+    init_guess_by_huckel = mol_rohf.ROHF.init_guess_by_huckel
 
-    density_fit = pbchf.SCF.density_fit
-    # mix_density_fit inherits from hf.SCF.mix_density_fit
-
-    x2c = x2c1e = sfx2c1e = pbchf.SCF.sfx2c1e
+    analyze = mol_rohf.ROHF.analyze
+    canonicalize = mol_rohf.ROHF.canonicalize
+    spin_square = mol_rohf.ROHF.spin_square
+    stability = mol_rohf.ROHF.stability
 
     def convert_from_(self, mf):
         '''Convert given mean-field object to RHF/ROHF'''
         from pyscf.pbc.scf import addons
         addons.convert_to_rhf(mf, self)
         return self
-
-    stability = None
-    nuc_grad_method = None
 

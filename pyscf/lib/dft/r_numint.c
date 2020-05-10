@@ -20,7 +20,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <complex.h>
-#include "cint.h"
+#include "config.h"
 #include "gto/grid_ao_drv.h"
 #include "np_helper/np_helper.h"
 #include "vhf/fblas.h"
@@ -78,9 +78,7 @@ void VXCzdot_ao_dm(double complex *vm, double complex *ao, double complex *dm,
 {
         const int nblk = (ngrids+BLKSIZE-1) / BLKSIZE;
 
-#pragma omp parallel default(none) \
-        shared(vm, ao, dm, nao, nocc, ngrids, nbas, \
-               non0table, shls_slice, ao_loc)
+#pragma omp parallel
 {
         int ip, ib;
 #pragma omp for nowait schedule(static)
@@ -143,9 +141,7 @@ void VXCzdot_ao_ao(double complex *vv, double complex *ao1, double complex *ao2,
         const int nblk = (ngrids+BLKSIZE-1) / BLKSIZE;
         memset(vv, 0, sizeof(double complex) * nao * nao);
 
-#pragma omp parallel default(none) \
-        shared(vv, ao1, ao2, nao, ngrids, nbas, hermi, \
-               non0table, shls_slice, ao_loc)
+#pragma omp parallel
 {
         int ip, ib;
         double complex *v_priv = calloc(nao*nao+2, sizeof(double complex));
@@ -167,4 +163,54 @@ void VXCzdot_ao_ao(double complex *vv, double complex *ao1, double complex *ao2,
         if (hermi != 0) {
                 NPzhermi_triu(nao, vv, hermi);
         }
+}
+
+void VXC_zscale_ao(double complex *aow, double complex *ao, double *wv,
+                   int comp, int nao, int ngrids)
+{
+#pragma omp parallel
+{
+        size_t Ngrids = ngrids;
+        size_t ao_size = nao * Ngrids;
+        int i, j, ic;
+        double complex *pao = ao;
+#pragma omp for schedule(static)
+        for (i = 0; i < nao; i++) {
+                pao = ao + i * Ngrids;
+                for (j = 0; j < Ngrids; j++) {
+                        aow[i*Ngrids+j] = pao[j] * wv[j];
+                }
+                for (ic = 1; ic < comp; ic++) {
+                for (j = 0; j < Ngrids; j++) {
+                        aow[i*Ngrids+j] += pao[ic*ao_size+j] * wv[ic*Ngrids+j];
+                } }
+        }
+}
+}
+
+// 'ip,ip->p'
+void VXC_zcontract_rho(double *rho, double complex *bra, double complex *ket,
+                       int nao, int ngrids)
+{
+#pragma omp parallel
+{
+        size_t Ngrids = ngrids;
+        int nthread = omp_get_num_threads();
+        int blksize = MAX((Ngrids+nthread-1) / nthread, 1);
+        int ib, b0, b1, i, j;
+#pragma omp for
+        for (ib = 0; ib < nthread; ib++) {
+                b0 = ib * blksize;
+                b1 = MIN(b0 + blksize, ngrids);
+                for (j = b0; j < b1; j++) {
+                        rho[j] = creal(bra[j]) * creal(ket[j])
+                               + cimag(bra[j]) * cimag(ket[j]);
+                }
+                for (i = 1; i < nao; i++) {
+                for (j = b0; j < b1; j++) {
+                        rho[j] += creal(bra[i*Ngrids+j]) * creal(ket[i*Ngrids+j])
+                                + cimag(bra[i*Ngrids+j]) * cimag(ket[i*Ngrids+j]);
+                } }
+        }
+}
 }

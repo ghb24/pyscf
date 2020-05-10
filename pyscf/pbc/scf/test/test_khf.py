@@ -64,7 +64,7 @@ class KnownValues(unittest.TestCase):
         upop, uchg = kumf.analyze()
         self.assertTrue(isinstance(rpop, np.ndarray) and rpop.ndim == 1)
         self.assertAlmostEqual(abs(upop[0]+upop[1]-rpop).max(), 0, 7)
-        self.assertAlmostEqual(lib.finger(rpop), 1.6974490052755433, 7)
+        self.assertAlmostEqual(lib.finger(rpop), 1.697446, 5)
 
     def test_kpt_vs_supercell_high_cost(self):
         # For large n, agreement is always achieved
@@ -121,7 +121,7 @@ class KnownValues(unittest.TestCase):
         kmf1.max_cycle = 2
         ekpt = kmf1.scf()
         kmf1.conv_check = False
-        self.assertAlmostEqual(ekpt, -11.215218432275057, 8)
+        self.assertAlmostEqual(ekpt, -11.215259853108822, 8)
 
     def test_krhf(self):
         self.assertAlmostEqual(kmf.e_tot, -11.218735269838586, 8)
@@ -132,7 +132,7 @@ class KnownValues(unittest.TestCase):
         np.random.seed(1)
         kpts_bands = np.random.random((2,3))
         e = kumf.get_bands(kpts_bands)[0]
-        self.assertAlmostEqual(finger(np.array(e)), -0.045547555445877741, 6)
+        self.assertAlmostEqual(finger(np.array(e)), -0.0455444, 6)
 
     def test_krhf_1d(self):
         L = 4
@@ -142,6 +142,7 @@ class KnownValues(unittest.TestCase):
                    mesh = [8,20,20],
                    atom = '''He 2 0 0; He 3 0 0''',
                    dimension = 1,
+                   low_dim_ft_type = 'inf_vacuum',
                    verbose = 0,
                    basis = { 'He': [[0, (0.8, 1.0)],
                                     #[0, (1.0, 1.0)],
@@ -163,6 +164,7 @@ class KnownValues(unittest.TestCase):
                    mesh = [10,10,20],
                    atom = '''He 2 0 0; He 3 0 0''',
                    dimension = 2,
+                   low_dim_ft_type = 'inf_vacuum',
                    verbose = 0,
                    basis = { 'He': [[0, (0.8, 1.0)],
                                     #[0, (1.0, 1.0)],
@@ -184,6 +186,7 @@ class KnownValues(unittest.TestCase):
                    mesh = [8,20,20],
                    atom = '''He 2 0 0; He 3 0 0''',
                    dimension = 1,
+                   low_dim_ft_type = 'inf_vacuum',
                    verbose = 0,
                    basis = { 'He': [[0, (0.8, 1.0)],
                                     #[0, (1.0, 1.0)],
@@ -205,6 +208,7 @@ class KnownValues(unittest.TestCase):
                    mesh = [8,20,20],
                    atom = '''He 2 0 0; He 3 0 0''',
                    dimension = 1,
+                   low_dim_ft_type = 'inf_vacuum',
                    verbose = 0,
                    basis = { 'He': [[0, (0.8, 1.0)],
                                     #[0, (1.0, 1.0)],
@@ -219,7 +223,7 @@ class KnownValues(unittest.TestCase):
         self.assertAlmostEqual(e1, -3.5112358424228809, 4)
 
     def test_get_fermi(self):
-        self.assertAlmostEqual(kmf.get_fermi(), 0.33154831914017424, 8)
+        self.assertAlmostEqual(kmf.get_fermi(), 0.33154831914017424, 6)
 
         def occ_vir(nocc, nvir):
             occ = np.zeros(nocc+nvir)
@@ -248,6 +252,25 @@ class KnownValues(unittest.TestCase):
         f = kumf.get_fermi(mo_e_kpts, mo_occ_kpts)
         self.assertAlmostEqual(f[0], 3, 9)
         self.assertAlmostEqual(f[1], 1.5, 9)
+
+    def test_dipole_moment(self):
+        dip = kmf.dip_moment()
+        self.assertAlmostEqual(lib.finger(dip), 0.729751581497479, 5)
+
+    def test_krhf_vs_rhf(self):
+        np.random.seed(1)
+        k = np.random.random(3)
+        mf = pscf.RHF(cell, k, exxdiv='vcut_sph')
+        mf.max_cycle = 1
+        mf.diis = None
+        e1 = mf.kernel()
+
+        kmf = pscf.KRHF(cell, [k], exxdiv='vcut_sph')
+        kmf.max_cycle = 1
+        kmf.diis = None
+        e2 = kmf.kernel()
+        self.assertAlmostEqual(e1, e2, 9)
+        self.assertAlmostEqual(e1, -11.451118801956275, 9)
 
 
 if __name__ == '__main__':

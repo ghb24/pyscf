@@ -1,4 +1,4 @@
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -120,8 +120,8 @@ def get_mo_pairs_G(cell, mo_coeffs, kpts=None, q=None):
     mo_pairs_G = np.zeros([ngrids,nmoi*nmoj], np.complex128)
 
     fac = np.exp(-1j*np.dot(coords, q))
-    for i in xrange(nmoi):
-        for j in xrange(nmoj):
+    for i in range(nmoi):
+        for j in range(nmoj):
             mo_pairs_R_ij = np.conj(moiR[:,i])*mojR[:,j]
             mo_pairs_G[:,i*nmoj+j] = tools.fftk(mo_pairs_R_ij, cell.mesh, fac)
 
@@ -172,8 +172,8 @@ def get_mo_pairs_invG(cell, mo_coeffs, kpts=None, q=None):
     mo_pairs_invG = np.zeros([ngrids,nmoi*nmoj], np.complex128)
 
     fac = np.exp(1j*np.dot(coords, q))
-    for i in xrange(nmoi):
-        for j in xrange(nmoj):
+    for i in range(nmoi):
+        for j in range(nmoj):
             mo_pairs_R_ij = np.conj(moiR[:,i])*mojR[:,j]
             mo_pairs_invG[:,i*nmoj+j] = np.conj(tools.fftk(np.conj(mo_pairs_R_ij), cell.mesh, fac))
 
@@ -225,8 +225,8 @@ def get_mo_pairs_G_old(cell, mo_coeffs, kpts=None, q=None):
     mo_pairs_invG = np.zeros([ngrids,nmoi*nmoj], np.complex128)
 
     fac = np.exp(-1j*np.dot(coords, q))
-    for i in xrange(nmoi):
-        for j in xrange(nmoj):
+    for i in range(nmoi):
+        for j in range(nmoj):
             mo_pairs_G[:,i*nmoj+j] = tools.fftk(mo_pairs_R[:,i,j], cell.mesh, fac)
             mo_pairs_invG[:,i*nmoj+j] = np.conj(tools.fftk(np.conj(mo_pairs_R[:,i,j]), cell.mesh,
                                                                    fac.conj()))
@@ -334,10 +334,15 @@ def finger(a):
     return np.dot(w, a.ravel())
 
 class KnownValues(unittest.TestCase):
+    def test_get_pp_loc_part1_high_cost(self):
+        df = aft.AFTDF(cell)
+        v1 = aft.get_pp_loc_part1(df, kpts[0])
+        self.assertAlmostEqual(finger(v1), (-6.0893491060887159+0.19823828749533859j), 8)
+
     def test_aft_get_nuc(self):
         df = aft.AFTDF(cell)
         v1 = df.get_nuc(kpts[0])
-        self.assertAlmostEqual(finger(v1), (-6.0893491060887159+0.19823828749533859j), 8)
+        self.assertAlmostEqual(finger(v1), (-5.764786312608102+0.19126292955145852j), 8)
 
     def test_aft_get_pp(self):
         v0 = pgto.pseudo.get_pp(cell, kpts[0])
@@ -483,6 +488,19 @@ class KnownValues(unittest.TestCase):
         eri_mo0 = df0.get_mo_eri((mo1,mo,mo1,mo), (kpts[0],kpts[1],kpts[1],kpts[0],))
         eri_mo1 = odf.get_mo_eri((mo1,mo,mo1,mo), (kpts[0],kpts[1],kpts[1],kpts[0],))
         self.assertTrue(np.allclose(eri_mo1, eri_mo0, atol=1e-7, rtol=1e-7))
+
+    def test_init_aft_1d(self):
+        cell = pgto.Cell()
+        cell.atom = 'He 1. .5 .5; He .1 1.3 2.1'
+        cell.basis = {'He': [(0, (2.5, 1)), (0, (1., 1))]}
+        cell.a = np.eye(3) * 2.5
+        cell.dimension = 1
+        cell.mesh = [3, 3, 3]
+        cell.build()
+        f = aft.AFTDF(cell)
+        np.random.seed(1)
+        f.kpts = np.random.random((4,3))
+        f.check_sanity()
 
 
 if __name__ == '__main__':

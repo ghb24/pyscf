@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@
 
 import numpy
 from pyscf import lib
-from pyscf.lib import logger
 from pyscf.cc import gccsd_rdm
 
 def _gamma1_intermediates(mycc, t1, t2, l1, l2, eris=None):
@@ -31,7 +30,7 @@ def _gamma1_intermediates(mycc, t1, t2, l1, l2, eris=None):
     majk = numpy.asarray(eris.ooov).conj().transpose(2,3,0,1)
     bcjk = numpy.asarray(eris.oovv).conj().transpose(2,3,0,1)
 
-    mo_e = eris.fock.diagonal().real
+    mo_e = eris.mo_energy
     eia = mo_e[:nocc,None] - mo_e[nocc:]
     d3 = lib.direct_sum('ia+jb+kc->ijkabc', eia, eia, eia)
 
@@ -66,7 +65,7 @@ def _gamma2_intermediates(mycc, t1, t2, l1, l2, eris=None):
     majk = numpy.asarray(eris.ooov).conj().transpose(2,3,0,1)
     bcjk = numpy.asarray(eris.oovv).conj().transpose(2,3,0,1)
 
-    mo_e = eris.fock.diagonal().real
+    mo_e = eris.mo_energy
     eia = mo_e[:nocc,None] - mo_e[nocc:]
     d3 = lib.direct_sum('ia+jb+kc->ijkabc', eia, eia, eia)
 
@@ -95,9 +94,9 @@ def _gamma2_intermediates(mycc, t1, t2, l1, l2, eris=None):
     dovvv += govvv.transpose(0,2,1,3) - govvv.transpose(0,3,1,2)
     return dovov, dvvvv, doooo, doovv, dovvo, dvvov, dovvv, dooov
 
-def make_rdm1(mycc, t1, t2, l1, l2, eris=None):
+def make_rdm1(mycc, t1, t2, l1, l2, eris=None, ao_repr=False):
     d1 = _gamma1_intermediates(mycc, t1, t2, l1, l2, eris)
-    return gccsd_rdm._make_rdm1(mycc, d1, True)
+    return gccsd_rdm._make_rdm1(mycc, d1, True, ao_repr=ao_repr)
 
 # rdm2 in Chemist's notation
 def make_rdm2(mycc, t1, t2, l1, l2, eris=None):
@@ -168,7 +167,6 @@ if __name__ == '__main__':
     mf0 = mf = scf.UHF(mol).run(conv_tol=1)
     mf = scf.addons.convert_to_ghf(mf)
 
-    from pyscf.cc import uccsd_t_slow
     from pyscf.cc import uccsd_t_lambda
     from pyscf.cc import uccsd_t_rdm
     mycc0 = cc.UCCSD(mf0)

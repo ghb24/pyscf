@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2019 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@ from pyscf import lib
 from pyscf.lib import logger
 from pyscf.scf import hf
 from pyscf.scf import uhf
-import pyscf.scf.chkfile
 from pyscf import __config__
 
 WITH_META_LOWDIN = getattr(__config__, 'scf_analyze_with_meta_lowdin', True)
@@ -42,6 +41,7 @@ def init_guess_by_atom(mol):
     dm = hf.init_guess_by_atom(mol)
     return numpy.array((dm*.5, dm*.5))
 
+init_guess_by_huckel = uhf.init_guess_by_huckel
 init_guess_by_chkfile = uhf.init_guess_by_chkfile
 
 def get_fock(mf, h1e=None, s1e=None, vhf=None, dm=None, cycle=-1, diis=None,
@@ -51,7 +51,7 @@ def get_fock(mf, h1e=None, s1e=None, vhf=None, dm=None, cycle=-1, diis=None,
     '''
     if h1e is None: h1e = mf.get_hcore()
     if s1e is None: s1e = mf.get_ovlp()
-    if vhf is None: vhf = mf.get_veff(dm=dm)
+    if vhf is None: vhf = mf.get_veff(mf.mol, dm)
     if dm is None: dm = mf.make_rdm1()
     if isinstance(dm, numpy.ndarray) and dm.ndim == 2:
         dm = numpy.array((dm*.5, dm*.5))
@@ -132,7 +132,7 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
     '''
 
     if mo_energy is None: mo_energy = mf.mo_energy
-    if hasattr(mo_energy, 'mo_ea'):
+    if getattr(mo_energy, 'mo_ea', None) is not None:
         mo_ea = mo_energy.mo_ea
         mo_eb = mo_energy.mo_eb
     else:
@@ -143,8 +143,10 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
         nelec = mf.mol.nelec
     else:
         nelec = mf.nelec
-    ncore = nelec[1]
-    nocc  = nelec[0]
+    if nelec[0] > nelec[1]:
+        nocc, ncore = nelec
+    else:
+        ncore, nocc = nelec
     nopen = nocc - ncore
     mo_occ = _fill_rohf_occ(mo_energy, mo_ea, mo_eb, ncore, nopen)
 
@@ -204,37 +206,38 @@ def get_grad(mo_coeff, mo_occ, fock):
     uniq_var_a = viridxa.reshape(-1,1) & occidxa
     uniq_var_b = viridxb.reshape(-1,1) & occidxb
 
-    if hasattr(fock, 'focka'):
+    if getattr(fock, 'focka', None) is not None:
         focka = fock.focka
         fockb = fock.fockb
     elif isinstance(fock, (tuple, list)) or getattr(fock, 'ndim', None) == 3:
         focka, fockb = fock
     else:
         focka = fockb = fock
-    focka = reduce(numpy.dot, (mo_coeff.T.conj(), focka, mo_coeff))
-    fockb = reduce(numpy.dot, (mo_coeff.T.conj(), fockb, mo_coeff))
+    focka = reduce(numpy.dot, (mo_coeff.conj().T, focka, mo_coeff))
+    fockb = reduce(numpy.dot, (mo_coeff.conj().T, fockb, mo_coeff))
 
     g = numpy.zeros_like(focka)
     g[uniq_var_a]  = focka[uniq_var_a]
     g[uniq_var_b] += fockb[uniq_var_b]
     return g[uniq_var_a | uniq_var_b]
 
-def make_rdm1(mo_coeff, mo_occ):
+def make_rdm1(mo_coeff, mo_occ, **kwargs):
     '''One-particle densit matrix.  mo_occ is a 1D array, with occupancy 1 or 2.
     '''
-    mo_a = mo_coeff[:,mo_occ>0]
-    mo_b = mo_coeff[:,mo_occ==2]
-    dm_a = numpy.dot(mo_a, mo_a.T)
-    dm_b = numpy.dot(mo_b, mo_b.T)
+    if isinstance(mo_occ, numpy.ndarray) and mo_occ.ndim == 1:
+        mo_occa = mo_occ > 0
+        mo_occb = mo_occ == 2
+    else:
+        mo_occa, mo_occb = mo_occ
+    dm_a = numpy.dot(mo_coeff*mo_occa, mo_coeff.conj().T)
+    dm_b = numpy.dot(mo_coeff*mo_occb, mo_coeff.conj().T)
     return numpy.array((dm_a, dm_b))
 
 def energy_elec(mf, dm=None, h1e=None, vhf=None):
     if dm is None: dm = mf.make_rdm1()
     elif isinstance(dm, numpy.ndarray) and dm.ndim == 2:
         dm = numpy.array((dm*.5, dm*.5))
-    ee, ecoul = uhf.energy_elec(mf, dm, h1e, vhf)
-    logger.debug(mf, 'Ecoul = %.15g', ecoul)
-    return ee, ecoul
+    return uhf.energy_elec(mf, dm, h1e, vhf)
 
 get_veff = uhf.get_veff
 
@@ -250,8 +253,10 @@ def analyze(mf, verbose=logger.DEBUG, with_meta_lowdin=WITH_META_LOWDIN,
     mo_coeff = mf.mo_coeff
     log = logger.new_logger(mf, verbose)
     if log.verbose >= logger.NOTE:
+        mf.dump_scf_summary(log)
+
         log.note('**** MO energy ****')
-        if hasattr(mo_energy, 'mo_ea'):
+        if getattr(mo_energy, 'mo_ea', None) is not None:
             mo_ea = mo_energy.mo_ea
             mo_eb = mo_energy.mo_eb
             log.note('                Roothaan           | alpha              | beta')
@@ -269,7 +274,7 @@ def analyze(mf, verbose=logger.DEBUG, with_meta_lowdin=WITH_META_LOWDIN,
         if with_meta_lowdin:
             log.debug(' ** MO coefficients (expansion on meta-Lowdin AOs) **')
             orth_coeff = orth.orth_ao(mf.mol, 'meta_lowdin', s=ovlp_ao)
-            c = reduce(numpy.dot, (orth_coeff.T, ovlp_ao, mo_coeff))
+            c = reduce(numpy.dot, (orth_coeff.conj().T, ovlp_ao, mo_coeff))
         else:
             log.debug(' ** MO coefficients (expansion on AOs) **')
             c = mo_coeff
@@ -289,14 +294,14 @@ def canonicalize(mf, mo_coeff, mo_occ, fock=None):
     '''Canonicalization diagonalizes the Fock matrix within occupied, open,
     virtual subspaces separatedly (without change occupancy).
     '''
-    if not hasattr(fock, 'focka'):
+    if getattr(fock, 'focka', None) is None:
         dm = mf.make_rdm1(mo_coeff, mo_occ)
         fock = mf.get_fock(dm=dm)
     mo_e, mo_coeff = hf.canonicalize(mf, mo_coeff, mo_occ, fock)
-    if hasattr(fock, 'focka'):
-        mo_ea = numpy.einsum('pi,pi->i', mo_coeff, fock.focka.dot(mo_coeff))
-        mo_eb = numpy.einsum('pi,pi->i', mo_coeff, fock.fockb.dot(mo_coeff))
-        mo_e = lib.tag_array(mo_e, mo_ea=mo_ea, mo_eb=mo_eb)
+    fa, fb = fock.focka, fock.fockb
+    mo_ea = numpy.einsum('pi,pi->i', mo_coeff.conj(), fa.dot(mo_coeff)).real
+    mo_eb = numpy.einsum('pi,pi->i', mo_coeff.conj(), fb.dot(mo_coeff)).real
+    mo_e = lib.tag_array(mo_e, mo_ea=mo_ea, mo_eb=mo_eb)
     return mo_e, mo_coeff
 
 dip_moment = hf.dip_moment
@@ -311,22 +316,32 @@ class ROHF(hf.RHF):
     def __init__(self, mol):
         hf.SCF.__init__(self, mol)
         self.nelec = None
-        self._keys = self._keys.union(['nelec'])
+
+    @property
+    def nelec(self):
+        if getattr(self, '_nelec', None) is not None:
+            return self._nelec
+        else:
+            return self.mol.nelec
+    @nelec.setter
+    def nelec(self, x):
+        self._nelec = x
+
+    @property
+    def nelectron_alpha(self):
+        return self.nelec[0]
+    @nelectron_alpha.setter
+    def nelectron_alpha(self, x):
+        logger.warn(self, 'WARN: Attribute .nelectron_alpha is deprecated. '
+                    'Set .nelec instead')
+        #raise RuntimeError('API updates')
+        self.nelec = (x, self.mol.nelectron-x)
 
     check_sanity = hf.SCF.check_sanity
 
-    def dump_flags(self):
-        hf.SCF.dump_flags(self)
-        if hasattr(self, 'nelectron_alpha'):  # pragma: no cover
-            logger.warn(self, 'Note the API updates: attribute nelectron_alpha was replaced by attribute nelec')
-            #raise RuntimeError('API updates')
-            self.nelec = (self.nelectron_alpha,
-                          self.mol.nelectron-self.nelectron_alpha)
-            delattr(self, 'nelectron_alpha')
-        if getattr(self, 'nelec', None) is None:
-            nelec = self.mol.nelec
-        else:
-            nelec = self.nelec
+    def dump_flags(self, verbose=None):
+        hf.SCF.dump_flags(self, verbose)
+        nelec = self.nelec
         logger.info(self, 'num. doubly occ = %d  num. singly occ = %d',
                     nelec[1], nelec[0]-nelec[1])
 
@@ -338,6 +353,11 @@ class ROHF(hf.RHF):
         if mol is None: mol = self.mol
         logger.info(self, 'Initial guess from the superpostion of atomic densties.')
         return init_guess_by_atom(mol)
+
+    def init_guess_by_huckel(self, mol=None):
+        if mol is None: mol = self.mol
+        logger.info(self, 'Initial guess from on-the-fly Huckel, doi:10.1021/acs.jctc.8b01089.')
+        return init_guess_by_huckel(mol)
 
     def init_guess_by_1e(self, mol=None):
         if mol is None: mol = self.mol
@@ -358,9 +378,9 @@ class ROHF(hf.RHF):
     @lib.with_doc(hf.eig.__doc__)
     def eig(self, fock, s):
         e, c = self._eigh(fock, s)
-        if hasattr(fock, 'focka'):
-            mo_ea = numpy.einsum('pi,pi->i', c, fock.focka.dot(c))
-            mo_eb = numpy.einsum('pi,pi->i', c, fock.fockb.dot(c))
+        if getattr(fock, 'focka', None) is not None:
+            mo_ea = numpy.einsum('pi,pi->i', c.conj(), fock.focka.dot(c)).real
+            mo_eb = numpy.einsum('pi,pi->i', c.conj(), fock.fockb.dot(c)).real
             e = lib.tag_array(e, mo_ea=mo_ea, mo_eb=mo_eb)
         return e, c
 
@@ -372,10 +392,13 @@ class ROHF(hf.RHF):
         return get_grad(mo_coeff, mo_occ, fock)
 
     @lib.with_doc(make_rdm1.__doc__)
-    def make_rdm1(self, mo_coeff=None, mo_occ=None):
+    def make_rdm1(self, mo_coeff=None, mo_occ=None, **kwargs):
         if mo_coeff is None: mo_coeff = self.mo_coeff
         if mo_occ is None: mo_occ = self.mo_occ
-        return make_rdm1(mo_coeff, mo_occ)
+        if self.mol.spin < 0:
+            # Flip occupancies of alpha and beta orbitals
+            mo_occ = (mo_occ == 2), (mo_occ > 0)
+        return make_rdm1(mo_coeff, mo_occ, **kwargs)
 
     energy_elec = energy_elec
 
@@ -386,9 +409,8 @@ class ROHF(hf.RHF):
         if isinstance(dm, numpy.ndarray) and dm.ndim == 2:
             dm = numpy.array((dm*.5, dm*.5))
 
-        if (self._eri is not None or not self.direct_scf or
-            mol.incore_anyway or self._is_mem_enough()):
-            if hasattr(dm, 'mo_coeff'):
+        if self._eri is not None or not self.direct_scf:
+            if getattr(dm, 'mo_coeff', None) is not None:
                 mo_coeff = dm.mo_coeff
                 mo_occ_a = (dm.mo_occ > 0).astype(numpy.double)
                 mo_occ_b = (dm.mo_occ ==2).astype(numpy.double)
@@ -413,10 +435,7 @@ class ROHF(hf.RHF):
 
     def spin_square(self, mo_coeff=None, s=None):
         '''Spin square and multiplicity of RHF determinant'''
-        if getattr(self, 'nelec', None) is None:
-            neleca, nelecb = self.mol.nelec
-        else:
-            neleca, nelecb = self.nelec
+        neleca, nelecb = self.nelec
         ms = (neleca - nelecb) * .5
         ss = ms * (ms + 1)
         return ss, ms*2+1

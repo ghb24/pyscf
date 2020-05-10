@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2014-2018 The PySCF Developers. All Rights Reserved.
+# Copyright 2014-2020 The PySCF Developers. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 # Author: Qiming Sun <osirpt.sun@gmail.com>
 #
 
-import time
 import numpy
 from pyscf import gto
 from pyscf.df import incore
@@ -43,8 +42,8 @@ def aux_e1(mol, auxmol, intor='int3c2e_spinor', aosym='s1', comp=1, hermi=0):
 def cholesky_eri(mol, auxbasis='weigend+etb', auxmol=None,
                  int3c='int3c2e_spinor', aosym='s1', int2c='int2c2e_sph', comp=1,
                  verbose=0):
-    return incore.cholesky_eri(mol, auxbasis, auxmol, int3c, aosym, int2c,
-                               comp, verbose, aux_e2)
+    return incore.cholesky_eri_debug(mol, auxbasis, auxmol, int3c, aosym, int2c,
+                                     comp, verbose, aux_e2)
 
 
 if __name__ == '__main__':
